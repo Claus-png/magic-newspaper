@@ -1,0 +1,200 @@
+<div class="nwpc-shell">
+
+  <!-- ══ ROW 1: PAGE + STYLE + ACTIONS ═══════════════════════ -->
+  <div class="nwpc-top-toolbar nwpc-toolbar-row1">
+
+    <!-- Страницы -->
+    <div class="nwpc-tb-group">
+      <select id="ed-page-select" class="nwpc-tb-select" style="max-width:168px;"></select>
+      <button id="ed-add-page" class="nwpc-tb-icon-btn" title="Новая страница"><i class="fas fa-plus"></i></button>
+      <button id="ed-rm-page"  class="nwpc-tb-icon-btn nwpc-icon-danger" title="Удалить страницу"><i class="fas fa-times"></i></button>
+    </div>
+
+    <div class="nwpc-tb-sep"></div>
+
+    <!-- Стиль бумаги -->
+    <div class="nwpc-tb-group">
+      <span class="nwpc-tb-label">Стиль:</span>
+      <select id="ed-paper-style" class="nwpc-tb-select" style="max-width:145px;">
+        <option value="classic">Классика</option>
+        <option value="gothic">Готика</option>
+        <option value="cyber">Кибер</option>
+        <option value="luxury">Люкс</option>
+        <option value="construct">Конструктивизм</option>
+        <option value="noir">Нуар</option>
+        <option value="vintage">Винтаж</option>
+        <option value="artdeco">Ар-деко</option>
+        <option value="tech">Тех</option>
+        <option value="terminal">Терминал</option>
+        <option value="grunge">Гранж</option>
+        <option value="academic">Академический</option>
+        <option value="archive">Архивный</option>
+        <option value="minimal">Минимализм</option>
+        <option value="industrial">Индустриальный</option>
+        <option value="rustic">Рустик</option>
+      </select>
+    </div>
+
+    <!-- Ориентация -->
+    <div class="nwpc-tb-group">
+      <select id="ed-orientation" class="nwpc-tb-select" style="max-width:100px;" title="Ориентация листа">
+        <option value="portrait">Портрет</option>
+        <option value="landscape">Альбом</option>
+      </select>
+    </div>
+
+    <!-- Размер -->
+    <div class="nwpc-tb-group">
+      <select id="ed-page-size" class="nwpc-tb-select" title="Размер листа" style="max-width:130px;">
+        <option value="A4">A4 (210×297)</option>
+        <option value="A3">A3 (297×420)</option>
+        <option value="A5">A5 (148×210)</option>
+        <option value="A2">A2 (420×594)</option>
+        <option value="A1">A1 (594×841)</option>
+        <option value="A0">A0 (841×1189)</option>
+        <option value="A6">A6 (105×148)</option>
+        <option value="custom">Свой размер</option>
+      </select>
+      <span id="ed-custom-size-wrap" style="display:none;align-items:center;gap:3px;">
+        <input id="ed-custom-w" type="number" min="200" max="5000" value="794" class="nwpc-tb-select" style="width:56px;" placeholder="W">
+        <span class="nwpc-tb-label">×</span>
+        <input id="ed-custom-h" type="number" min="200" max="6000" value="1123" class="nwpc-tb-select" style="width:56px;" placeholder="H">
+      </span>
+    </div>
+
+    <!-- Цвет бумаги -->
+    <div class="nwpc-tb-group" title="Цвет листа">
+      <span class="nwpc-tb-label">Лист:</span>
+      <label class="nwpc-color-swatch-btn" title="Цвет фона листа">
+        <input id="ed-paper-color" type="color" value="#f4f1ea" style="opacity:0;position:absolute;width:0;height:0;">
+        <span id="ed-paper-color-preview" class="nwpc-color-preview" style="background:#f4f1ea;"></span>
+      </label>
+      <input id="ed-paper-color-hex" type="text" placeholder="#f4f1ea" class="nwpc-tb-select" style="width:68px;font-size:.72rem;">
+      <button id="ed-paper-color-reset" class="nwpc-tb-icon-btn" title="Сбросить цвет"><i class="fas fa-undo"></i></button>
+    </div>
+
+    <div class="nwpc-tb-sep"></div>
+
+    <!-- Сетка + Линейки -->
+    <div class="nwpc-tb-group">
+      <button id="ed-grid-toggle"   class="nwpc-tb-icon-btn nwpc-toggle-btn active" title="Сетка (G)"><i class="fas fa-border-all"></i></button>
+      <button id="ed-snap-toggle"   class="nwpc-tb-icon-btn nwpc-toggle-btn active" title="Привязка к сетке"><i class="fas fa-magnet"></i></button>
+    </div>
+
+    <div class="nwpc-tb-sep"></div>
+
+    <!-- Действия справа -->
+    <div class="nwpc-tb-group" style="margin-left:auto;gap:3px;">
+      <button id="ed-import-btn"  class="nwpc-tb-icon-btn nwpc-btn-import"  title="Импорт JSON"><i class="fas fa-file-import"></i></button>
+      <button id="ed-export-btn"  class="nwpc-tb-icon-btn nwpc-btn-export"  title="Экспорт JSON"><i class="fas fa-file-export"></i></button>
+      <div class="nwpc-tb-sep"></div>
+      <button id="ed-reset-btn"   class="nwpc-tb-icon-btn nwpc-icon-danger" title="Очистить страницу"><i class="fas fa-trash-alt"></i></button>
+      <button id="ed-html2text-btn" class="nwpc-tb-icon-btn"               title="HTML → Текст"><i class="fas fa-code"></i></button>
+      <div class="nwpc-tb-sep"></div>
+      <button id="ed-templates-btn" class="nwpc-tb-btn"             title="Галерея шаблонов"><i class="fas fa-th-large"></i> Шаблоны</button>
+      <button id="ed-view-btn"    class="nwpc-tb-btn"              title="Просмотр"><i class="fas fa-eye"></i> Просмотр</button>
+      <button id="ed-author-btn"  class="nwpc-tb-btn"              title="Автор страницы"><i class="fas fa-feather-alt"></i> Автор</button>
+      <button id="ed-draft-btn"   class="nwpc-tb-btn nwpc-btn-draft" title="Сохранить черновик"><i class="fas fa-pencil-alt"></i> Черновик</button>
+      <button id="ed-save-btn"    class="nwpc-tb-btn nwpc-btn-save"  title="Сохранить (Ctrl+S)"><i class="fas fa-save"></i> Сохранить</button>
+      <button id="ed-breaking-btn" class="nwpc-tb-btn nwpc-btn-breaking" title="Экстренный выпуск — оверлей для всех игроков"><i class="fas fa-bolt"></i> Срочно</button>
+      <button id="ed-publish-btn" class="nwpc-tb-btn nwpc-btn-pub"   title="Выпустить в чат"><i class="fas fa-paper-plane"></i> Выпустить</button>
+      <span id="ed-autosave-badge"></span>
+      <button id="ed-autosave-restore" title="Восстановить последнее автосохранение"><i class="fas fa-history"></i> Восстановить последнее</button>
+    </div>
+
+  </div>
+
+  <!-- ══ ROW 2: ADD ELEMENTS + ZOOM + ALIGN ══════════════════ -->
+  <div class="nwpc-top-toolbar nwpc-toolbar-row2">
+
+    <!-- Добавить элемент -->
+    <div class="nwpc-tb-group">
+      <span class="nwpc-tb-label" style="font-size:.65rem;color:#666;">ДОБАВИТЬ:</span>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="masthead"  title="Шапка газеты"><i class="fas fa-newspaper"></i><span>Шапка</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="headline"  title="Заголовок"><i class="fas fa-heading"></i><span>Заголовок</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="body"      title="Текст статьи"><i class="fas fa-align-justify"></i><span>Текст</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="image"     title="Изображение"><i class="fas fa-image"></i><span>Фото</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="rule"      title="Разделитель"><i class="fas fa-grip-lines"></i><span>Линия</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="quote"     title="Цитата"><i class="fas fa-quote-left"></i><span>Цитата</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="box"       title="Блок заметки"><i class="fas fa-square"></i><span>Блок</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="ad"        title="Объявление"><i class="fas fa-rectangle-ad"></i><span>Объявл.</span></button>
+      <button class="nwpc-tb-el-btn ed-add-el-btn" data-type="byline"    title="Автор"><i class="fas fa-user-edit"></i><span>Автор</span></button>
+    </div>
+
+    <div class="nwpc-tb-sep"></div>
+
+    <!-- Выравнивание выбранного -->
+    <div class="nwpc-tb-group" id="ed-align-group" style="opacity:.4;" title="Выравнивание элемента на странице">
+      <span class="nwpc-tb-label" style="font-size:.65rem;color:#666;">ВЫРАВН.:</span>
+      <button class="nwpc-tb-icon-btn nwpc-align-btn" data-align="left"   title="По левому краю"><i class="fas fa-align-left"></i></button>
+      <button class="nwpc-tb-icon-btn nwpc-align-btn" data-align="hcenter" title="По горизонтальному центру"><i class="fas fa-align-center"></i></button>
+      <button class="nwpc-tb-icon-btn nwpc-align-btn" data-align="right"  title="По правому краю"><i class="fas fa-align-right"></i></button>
+      <div class="nwpc-tb-sep" style="height:16px;"></div>
+      <button class="nwpc-tb-icon-btn nwpc-align-btn" data-align="top"    title="По верхнему краю"><i class="fas fa-arrow-up"></i></button>
+      <button class="nwpc-tb-icon-btn nwpc-align-btn" data-align="vcenter" title="По вертикальному центру"><i class="fas fa-arrows-alt-v"></i></button>
+      <button class="nwpc-tb-icon-btn nwpc-align-btn" data-align="bottom" title="По нижнему краю"><i class="fas fa-arrow-down"></i></button>
+    </div>
+
+    <div class="nwpc-tb-sep"></div>
+
+    <!-- Зум -->
+    <div class="nwpc-tb-group">
+      <button id="ed-zoom-out" class="nwpc-tb-icon-btn" title="Уменьшить (-)"><i class="fas fa-search-minus"></i></button>
+      <span id="ed-zoom-label" class="nwpc-zoom-label">75%</span>
+      <button id="ed-zoom-in"  class="nwpc-tb-icon-btn" title="Увеличить (+)"><i class="fas fa-search-plus"></i></button>
+      <button id="ed-zoom-fit" class="nwpc-tb-icon-btn nwpc-active" title="Вписать в экран (F)"><i class="fas fa-compress-alt"></i></button>
+      <button id="ed-zoom-100" class="nwpc-tb-icon-btn" title="100%">1:1</button>
+    </div>
+
+    <!-- Undo/Redo -->
+    <div class="nwpc-tb-group" style="margin-left:8px;">
+      <button id="ed-undo-btn" class="nwpc-tb-icon-btn" title="Отменить (Ctrl+Z)"><i class="fas fa-undo"></i></button>
+      <button id="ed-redo-btn" class="nwpc-tb-icon-btn" title="Повторить (Ctrl+Y)"><i class="fas fa-redo"></i></button>
+    </div>
+
+  </div>
+
+  <!-- ══ TABS ═════════════════════════════════════════════════ -->
+  <div class="nwpc-tab-bar">
+    <button class="ed-tab-btn active" data-tab="canvas"><i class="fas fa-drafting-compass"></i> Конструктор</button>
+    <button class="ed-tab-btn"        data-tab="drafts"><i class="fas fa-pencil-alt"></i> Черновики</button>
+    <button class="ed-tab-btn"        data-tab="archive"><i class="fas fa-archive"></i> Архив</button>
+  </div>
+
+  <!-- ══ MAIN: CANVAS + PROPS ═════════════════════════════════ -->
+  <div class="nwpc-main">
+
+    <!-- Canvas -->
+    <div class="nwpc-canvas-wrap" id="ed-canvas-wrap">
+      <div class="nwpc-canvas-outer">
+        <div id="nwpc-canvas" class="nwpc-paper nwpc-paper-classic"></div>
+      </div>
+    </div>
+
+    <!-- Props Panel -->
+    <div class="nwpc-props-panel" id="nwpc-props">
+      <div class="nwpc-props-empty">
+        <i class="fas fa-mouse-pointer"></i>
+        <p>Выберите элемент</p>
+        <small>Клик — выделить · Метка — переместить</small>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ══ LIST AREA (drafts / archive) ═════════════════════════ -->
+  <div id="ed-list-area" style="display:none;flex:1;overflow:auto;background:#1a1a1a;"></div>
+
+  <!-- ══ STATUS BAR ═══════════════════════════════════════════ -->
+  <div class="nwpc-statusbar">
+    <span id="sb-elements">Элементов: 0</span>
+    <span class="nwpc-sb-sep">·</span>
+    <span id="sb-page-size">A4</span>
+    <span class="nwpc-sb-sep">·</span>
+    <span id="sb-cursor">X: 0  Y: 0</span>
+    <span style="margin-left:auto;" id="sb-selected"></span>
+    <span class="nwpc-sb-sep">·</span>
+    <span id="sb-history">Шагов: 0</span>
+  </div>
+
+</div>

@@ -1,0 +1,61 @@
+<div class="nwp-viewer-shell">
+
+  <!-- Toolbar -->
+  <div class="nwp-toolbar">
+    <div class="nwp-toolbar-left">
+      {{#if (gt totalPages 1)}}
+      <button id="nv-prev-btn" class="nwp-tb-btn" {{#unless (gt pageNum 1)}}disabled{{/unless}}
+        title="{{localize 'cmt.viewer.prevPage'}}">
+        <i class="fas fa-chevron-left"></i>
+      </button>
+      <span class="nwp-page-indicator">{{pageNum}} / {{totalPages}}</span>
+      <button id="nv-next-btn" class="nwp-tb-btn" {{#unless (lt pageNum totalPages)}}disabled{{/unless}}
+        title="{{localize 'cmt.viewer.nextPage'}}">
+        <i class="fas fa-chevron-right"></i>
+      </button>
+      {{#if isGM}}
+      <button id="nv-force-page-btn" class="nwp-tb-btn" style="margin-left:4px;"
+        title="{{localize 'cmt.viewer.showAll'}}">
+        <i class="fas fa-broadcast-tower"></i>
+      </button>
+      {{/if}}
+      {{/if}}
+
+      <div class="nwp-tb-sep"></div>
+
+      <!-- Zoom -->
+      <button id="nv-zoom-out" class="nwp-tb-btn" title="{{localize 'cmt.viewer.zoomOut'}}"><i class="fas fa-search-minus"></i></button>
+      <span id="nv-zoom-label" class="nwp-page-indicator" style="min-width:3rem;text-align:center;">100%</span>
+      <button id="nv-zoom-in"  class="nwp-tb-btn" title="{{localize 'cmt.viewer.zoomIn'}}"><i class="fas fa-search-plus"></i></button>
+      <button id="nv-zoom-fit" class="nwp-tb-btn" title="{{localize 'cmt.viewer.zoomFit'}}"><i class="fas fa-compress-alt"></i></button>
+    </div>
+
+    <div class="nwp-toolbar-right">
+      {{#if isGM}}
+      <button id="nv-open-editor-btn" class="nwp-tb-btn nwp-tb-btn-accent"
+        title="{{localize 'cmt.viewer.openEditor'}}">
+        <i class="fas fa-edit"></i> {{localize "cmt.controls.editorBtn"}}
+      </button>
+      {{/if}}
+      <button id="nv-export-btn" class="nwp-tb-btn" title="{{localize 'cmt.viewer.exportJSON'}}">
+        <i class="fas fa-file-export"></i>
+      </button>
+      <button id="nv-download-btn" class="nwp-tb-btn" title="{{localize 'cmt.viewer.downloadHTML'}}">
+        <i class="fas fa-download"></i>
+      </button>
+      <button id="nv-save-journal-btn" class="nwp-tb-btn" title="{{localize 'cmt.viewer.saveJournal'}}">
+        <i class="fas fa-book-open"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- Newspaper canvas -->
+  <div class="nv-canvas-wrap">
+    <div class="nv-canvas-outer">
+      <div id="nv-paper" class="nwpc-paper nwpc-paper-classic">
+        <!-- Строится через JS в _renderPage() -->
+      </div>
+    </div>
+  </div>
+
+</div>
