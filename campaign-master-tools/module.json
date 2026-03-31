@@ -1,0 +1,45 @@
+{
+  "id": "campaign-master-tools",
+  "title": "Magic Newspaper",
+  "description": "<p>Drag-and-drop конструктор внутриигровых газет для Foundry VTT v13. Мастер верстает — игроки читают в реальном времени. 16 стилей бумаги, 9 типов элементов, типографика, история действий, дублирование, привязка к сетке, выравнивание, публикация в чат, архив, черновики, галерея шаблонов, экстренный выпуск, экспорт HTML/JSON.</p>",
+  "version": "1.0.6",
+  "socket": true,
+  "authors": [
+    {
+      "name": "Teddy Bear",
+      "url": "https://boosty.to/tedmbear",
+      "flags": {}
+    }
+  ],
+  "compatibility": {
+    "minimum": "13",
+    "verified": "13.351"
+  },
+  "esmodules": [
+    "scripts/main.mjs"
+  ],
+  "styles": [
+    "styles/campaign-master.css"
+  ],
+  "languages": [
+    {
+      "lang": "ru",
+      "name": "Русский",
+      "path": "lang/ru.json",
+      "flags": {}
+    },
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json",
+      "flags": {}
+    }
+  ],
+  "url": "https://github.com/YOUR_LOGIN/magic-newspaper",
+  "readme": "https://github.com/YOUR_LOGIN/magic-newspaper/blob/main/README.md",
+  "bugs": "https://github.com/YOUR_LOGIN/magic-newspaper/issues",
+  "changelog": "https://github.com/YOUR_LOGIN/magic-newspaper/blob/main/CHANGELOG.md",
+  "manifest": "https://github.com/YOUR_LOGIN/magic-newspaper/releases/latest/download/module.json",
+  "download": "https://github.com/YOUR_LOGIN/magic-newspaper/releases/download/1.0.6/module.zip",
+  "flags": {}
+}
