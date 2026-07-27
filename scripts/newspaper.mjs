@@ -1,11 +1,36 @@
 // LiveNewspaper — data model
 // Teddy Bear
 
+import { NewspaperDataModel, NewspaperArchiveModel, NewspaperDraftModel } from './models.mjs';
+
 const SETTING_KEY = 'newspaperData';
 const ARCHIVE_KEY = 'newspaperArchive';
 const DRAFT_KEY   = 'newspaperDraft';
 
-// Page sizes in px at 96dpi
+export const UPLOAD_DIR = 'campaign-master-tools/uploads';
+
+let _uploadDirReady = false;
+
+export async function ensureUploadDir() {
+  if (_uploadDirReady) return;
+  const FP = foundry.applications.apps.FilePicker.implementation;
+  try {
+    await FP.browse('data', UPLOAD_DIR);
+    _uploadDirReady = true;
+  } catch (e) {
+    try {
+      await FP.createDirectory('data', UPLOAD_DIR, {});
+    } catch (e2) { /* уже существует или создалась параллельно — не страшно */ }
+    _uploadDirReady = true;
+  }
+}
+
+export async function uploadToDataDir(file) {
+  await ensureUploadDir();
+  const FP = foundry.applications.apps.FilePicker.implementation;
+  return FP.upload('data', UPLOAD_DIR, file, {}, { notify: false });
+}
+
 export const PAGE_SIZES = {
   A0: { w: 3179, h: 4494, label: 'A0  (841×1189 мм)' },
   A1: { w: 2245, h: 3179, label: 'A1  (594×841 мм)' },
@@ -17,7 +42,6 @@ export const PAGE_SIZES = {
   custom: { w: 794, h: 1123, label: 'Свой размер' },
 };
 
-// Дефолтные шаблоны для каждого типа элемента
 export const ELEMENT_DEFAULTS = {
   masthead: { type:'masthead', x:0,   y:0,   w:794, h:160, props:{ line1:'The Kingdom', line2:'Times', motto:'\"Все новости, достойные печати\"', style:'classic', textColor:'' } },
   headline: { type:'headline', x:0,   y:180, w:540, h:110, props:{ text:'Заголовок статьи', fontSize:34, fontUnit:'px', textColor:'' } },
@@ -30,7 +54,6 @@ export const ELEMENT_DEFAULTS = {
   byline:   { type:'byline',   x:0,   y:300, w:540, h:28,  props:{ text:'Корреспондент: Придворный Репортёр', textColor:'' } },
 };
 
-// Создать страницу с дефолтным набором элементов
 export function makeDefaultPage(style = 'classic', size = 'A4') {
   const sz = PAGE_SIZES[size] || PAGE_SIZES.A4;
   return {
@@ -55,7 +78,46 @@ export function makeDefaultPage(style = 'classic', size = 'A4') {
   };
 }
 
+export function triggerMatchesUser(el, user) {
+  const actor = user?.character;
+  if (!actor || !el.triggerKey) return false;
+  if (el.triggerType === 'flag') {
+    return !!actor.getFlag('campaign-master-tools', el.triggerKey);
+  }
+  return actor.statuses?.has?.(el.triggerKey) || actor.effects?.some?.(e => e.name === el.triggerKey || e.statuses?.has?.(el.triggerKey));
+}
+
+export function resolveElementForUser(el, user) {
+  if (!user) return el;
+  const v = el.visibility ?? 'all';
+
+  if (v === 'gm'      && !user.isGM) return null;
+  if (v === 'role'    && !user.isGM && user.role < (el.visibilityRole ?? 1)) return null;
+  if (v === 'users'   && !user.isGM && !(el.visibilityUserIds || []).includes(user.id)) return null;
+  if (v === 'trigger' && !user.isGM && !triggerMatchesUser(el, user)) return null;
+
+  const variants = el.variants || {};
+  const userKey    = `user:${user.id}`;
+  const roleKey    = `role:${user.role}`;
+  const triggerKey = `trigger:${el.triggerKey}`;
+  const override = (!user.isGM && triggerMatchesUser(el, user) && variants[triggerKey])
+    || variants[userKey] || variants[roleKey];
+  const resolved = override ? { ...el, props: { ...el.props, ...override } } : el;
+  if (!user.isGM && resolved.gmNote) { const { gmNote, ...rest } = resolved; return rest; }
+  return resolved;
+}
+
 function clone(o) { return JSON.parse(JSON.stringify(o)); }
+
+function _validate(ModelClass, raw, fallback) {
+  try {
+    const model = new ModelClass(raw);
+    return model.toObject();
+  } catch (e) {
+    console.warn('[CMT] Ошибка валидации данных, используется резервная копия:', e);
+    return clone(fallback);
+  }
+}
 
 const DEFAULT_DATA    = { pages: [ makeDefaultPage() ], currentPage: 0, updatedAt: null };
 const DEFAULT_ARCHIVE = { entries: [] };
@@ -72,9 +134,9 @@ export class LiveNewspaper {
     game.settings.register('campaign-master-tools', ARCHIVE_KEY,  { ...base, name:'Архив газеты',   default:DEFAULT_ARCHIVE });
     game.settings.register('campaign-master-tools', DRAFT_KEY,    { ...base, name:'Черновики',      default:DEFAULT_DRAFT   });
     game.settings.register('campaign-master-tools', 'autoDraft',  { ...base, name:'Автосохранение (слот)', default:null });
+    game.settings.register('campaign-master-tools', 'customTemplates', { ...base, name:'Пользовательские шаблоны', default: [] });
+    game.settings.register('campaign-master-tools', 'favoriteTemplateIds', { ...base, name:'Избранные шаблоны', default: [] });
 
-    // Права доступа по ролям — i18n не готов на стадии 'init',
-    // поэтому передаём ключ локализации, Foundry сам подставит строку при отображении настроек
     const roleChoices = { 1:'Все игроки (Player)', 2:'Доверенные (Trusted)', 3:'Ассистент GM (Assistant)', 4:'Только GM' };
     ['Create','Edit','Publish','View'].forEach(action => {
       game.settings.register('campaign-master-tools', `role${action}`, {
@@ -105,16 +167,18 @@ export class LiveNewspaper {
       LiveNewspaper._draft   = game.settings.get('campaign-master-tools', DRAFT_KEY)   || clone(DEFAULT_DRAFT);
       if (!LiveNewspaper._data.pages) LiveNewspaper._data = clone(DEFAULT_DATA);
       LiveNewspaper._data.pages = LiveNewspaper._data.pages.map(p => p.elements ? _ensurePageDefaults(p) : _migrateLegacyPage(p));
-      // Страховка на случай если данные пришли в нестандартном виде
       if (!Array.isArray(LiveNewspaper._archive.entries)) LiveNewspaper._archive = clone(DEFAULT_ARCHIVE);
       if (!Array.isArray(LiveNewspaper._draft.pages))     LiveNewspaper._draft   = clone(DEFAULT_DRAFT);
+      LiveNewspaper._data    = _validate(NewspaperDataModel,    LiveNewspaper._data,    DEFAULT_DATA);
+      LiveNewspaper._archive = _validate(NewspaperArchiveModel, LiveNewspaper._archive, DEFAULT_ARCHIVE);
+      LiveNewspaper._draft   = _validate(NewspaperDraftModel,   LiveNewspaper._draft,   DEFAULT_DRAFT);
     } catch(e) {
       console.warn('[CMT] Init error:', e);
       LiveNewspaper._data    = clone(DEFAULT_DATA);
       LiveNewspaper._archive = clone(DEFAULT_ARCHIVE);
       LiveNewspaper._draft   = clone(DEFAULT_DRAFT);
     }
-    console.log('[CMT Newspaper] Инициализирован v1.0.5');
+    console.log('[CMT Newspaper] Инициализирован v2.0.0');
   }
 
   static getData()      { return LiveNewspaper._data    || clone(DEFAULT_DATA); }
@@ -122,10 +186,9 @@ export class LiveNewspaper {
   static getDraft()     { return LiveNewspaper._draft   || clone(DEFAULT_DRAFT); }
   static getPage(index) { const d = LiveNewspaper.getData(); return d.pages[index ?? d.currentPage] || d.pages[0]; }
 
-  // --- Page CRUD ---
-
   static async setPage(index, pageData) {
     const d = LiveNewspaper.getData();
+    pageData.revisionId = (d.pages[index]?.revisionId || 0) + 1;
     d.pages[index] = pageData;
     d.updatedAt = new Date().toISOString();
     LiveNewspaper._data = d;
@@ -153,8 +216,6 @@ export class LiveNewspaper {
     return true;
   }
 
-  // --- Drafts ---
-
   static async saveDraft(pageIndex, pageData, name = '') {
     const dr = LiveNewspaper.getDraft();
     if (!Array.isArray(dr.pages)) dr.pages = [];
@@ -179,7 +240,6 @@ export class LiveNewspaper {
     await game.settings.set('campaign-master-tools', DRAFT_KEY, dr);
   }
 
-  // Авто-черновик — один слот, перезаписывается каждый раз (для кнопки «Восстановить»)
   static async saveAutoDraft(pageIndex, pageData) {
     const entry = {
       id: '__auto__',
@@ -194,8 +254,6 @@ export class LiveNewspaper {
     try { return game.settings.get('campaign-master-tools', 'autoDraft') || null; }
     catch { return null; }
   }
-
-  // --- Archive ---
 
   static async archivePage(pageData, name = '') {
     const ar = LiveNewspaper.getArchive();
@@ -233,11 +291,9 @@ export class LiveNewspaper {
     return d.pages.length - 1;
   }
 
-  // --- Export / Import ---
-
   static exportJSON() {
     const payload = {
-      version: '1.0.5',
+      version: '2.0.0',
       exportedAt: new Date().toISOString(),
       data: LiveNewspaper.getData(),
     };
@@ -254,11 +310,11 @@ export class LiveNewspaper {
   static async importJSON(jsonText) {
     try {
       const payload = JSON.parse(jsonText);
-      const data = payload.data || payload; // поддержка прямого data-объекта
+      const data = payload.data || payload;
       if (!data.pages || !Array.isArray(data.pages)) throw new Error('Неверный формат файла');
       data.pages = data.pages.map(p => p.elements ? _ensurePageDefaults(p) : _migrateLegacyPage(p));
       data.currentPage = Math.min(data.currentPage || 0, data.pages.length - 1);
-      LiveNewspaper._data = data;
+      LiveNewspaper._data = _validate(NewspaperDataModel, data, LiveNewspaper._data);
       await LiveNewspaper._save();
       ui.notifications.info(`Импортировано ${data.pages.length} стр.`);
       return true;
@@ -268,8 +324,65 @@ export class LiveNewspaper {
     }
   }
 
+  static getCustomTemplates() {
+    return game.settings.get('campaign-master-tools', 'customTemplates') || [];
+  }
+
+  static async saveCustomTemplate(page, label, icon = 'fas fa-star') {
+    const list = LiveNewspaper.getCustomTemplates();
+    const id = `custom_${Date.now()}_${Math.random().toString(36).slice(2,6)}`;
+    list.push({
+      id, label, icon,
+      paperStyle: page.paperStyle || 'classic',
+      elements: clone(page.elements || []),
+      custom: true,
+    });
+    await game.settings.set('campaign-master-tools', 'customTemplates', list);
+    return id;
+  }
+
+  static async deleteCustomTemplate(id) {
+    const list = LiveNewspaper.getCustomTemplates().filter(t => t.id !== id);
+    await game.settings.set('campaign-master-tools', 'customTemplates', list);
+  }
+
+  static getFavoriteTemplateIds() {
+    return game.settings.get('campaign-master-tools', 'favoriteTemplateIds') || [];
+  }
+
+  static async toggleFavoriteTemplate(id) {
+    const set = new Set(LiveNewspaper.getFavoriteTemplateIds());
+    if (set.has(id)) set.delete(id); else set.add(id);
+    await game.settings.set('campaign-master-tools', 'favoriteTemplateIds', Array.from(set));
+    return set.has(id);
+  }
+
   static async _save() {
     await game.settings.set('campaign-master-tools', SETTING_KEY, LiveNewspaper._data);
+  }
+
+  static async migrateBase64Images() {
+    if (!game.user.isGM) return;
+    let migrated = 0;
+    const d = LiveNewspaper.getData();
+    for (const page of d.pages) {
+      for (const el of (page.elements || [])) {
+        if (el.type !== 'image' || !el.props?.url?.startsWith('data:image')) continue;
+        try {
+          const blob = await (await fetch(el.props.url)).blob();
+          const ext  = (blob.type.split('/')[1] || 'png').replace('jpeg','jpg');
+          const file = new File([blob], `legacy_${el.id}_${Date.now()}.${ext}`, { type: blob.type });
+          const res  = await uploadToDataDir(file);
+          if (res?.path) { el.props.url = res.path; migrated++; }
+        } catch(e) { console.warn('[CMT] Не удалось мигрировать изображение элемента', el.id, e); }
+      }
+    }
+    if (migrated > 0) {
+      LiveNewspaper._data = d;
+      await LiveNewspaper._save();
+      ui.notifications.info(`Мигрировано изображений: ${migrated}`);
+    }
+    return migrated;
   }
 
   static async notifyUpdate() {
@@ -287,8 +400,6 @@ export class LiveNewspaper {
   }
 }
 
-// --- Helpers ---
-
 function _ensurePageDefaults(p) {
   p.orientation = p.orientation || 'portrait';
   p.paperColor  = p.paperColor  || '';
@@ -296,7 +407,6 @@ function _ensurePageDefaults(p) {
   p.customW     = p.customW     || 794;
   p.customH     = p.customH     || 1123;
   p.isDraft     = p.isDraft     ?? false;
-  // Убираем устаревшее поле подвала
   delete p.footerText;
   p.elements = (p.elements||[]).map(el => {
     if (!el.props) el.props = {};
@@ -327,7 +437,6 @@ function _migrateLegacyPage(p) {
   return page;
 }
 
-// Единый источник истины для текстур бумаги — импортируется в editor и viewer
 export const PAPER_IMG_BASE = 'modules/campaign-master-tools/assets/paper';
 export const PAPER_IMAGES = {
   classic:'Classic.webp', gothic:'Gothic.webp', cyber:'Cyber.webp',
@@ -338,7 +447,6 @@ export const PAPER_IMAGES = {
   rustic:'Rustic.webp',
 };
 
-// Общий рендерер HTML-представления элемента (viewer + journal export)
 export function renderElementHTML(el) {
   const p = el.props || {};
   const safe = v => String(v||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -422,7 +530,6 @@ export function renderElementHTML(el) {
   }
 }
 
-// Конвертация страницы в HTML для журнала Foundry
 export function pageToJournalHTML(page) {
   const safe = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const md = t => t

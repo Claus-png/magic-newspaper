@@ -1,7 +1,10 @@
 // News Editor — Teddy Bear
 
 const { ApplicationV2, HandlebarsApplicationMixin, DialogV2 } = foundry.applications.api;
-import { PAGE_SIZES, ELEMENT_DEFAULTS, makeDefaultPage, LiveNewspaper, PAPER_IMG_BASE, PAPER_IMAGES, renderElementHTML } from '../newspaper.mjs';
+import { PAGE_SIZES, ELEMENT_DEFAULTS, makeDefaultPage, LiveNewspaper, PAPER_IMG_BASE, PAPER_IMAGES, renderElementHTML, resolveElementForUser, uploadToDataDir } from '../newspaper.mjs';
+import { DiffHistory } from '../history-diff.mjs';
+import { broadcastBreakingNews, openViewerForUsers, createPersonalJournalForUser } from '../socket.mjs';
+import { isFeatureEnabled } from '../feature-flags.mjs';
 
 let GRID = 10;
 let SNAP = true;
@@ -65,11 +68,14 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this._zoom         = 0.75;
     this._saveTimer    = null;
     this._tab          = 'canvas';
-    this._history      = [];
-    this._historyIdx   = -1;
+    this._history      = new DiffHistory(50);
     this._maxHistory   = 50;
     this._showGrid     = true;
     this._lockedIds    = new Set();
+    this._copiedStyle  = null;
+    this._pinnedIds    = new Set();
+    this._hiddenIds    = new Set();
+    this._openSections = new Set(['geom','appearance','textcolor','content','layerlist']);
     /* Auto-save indicator */
     this._lastSaveTs   = null;   // timestamp of last successful save
     this._saveTicker   = null;   // setInterval handle
@@ -141,13 +147,15 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       cInp.addEventListener('input', updateColor);
       cHex.addEventListener('change', ()=>{ if(/^#[0-9a-fA-F]{6}$/.test(cHex.value)){ cInp.value=cHex.value; updateColor(); } });
       html.querySelector('#ed-paper-color-reset')?.addEventListener('click', async()=>{ const p=this._getPageData(); p.paperColor=''; cInp.value='#f4f1ea'; cHex.value=''; if(cPrev) cPrev.style.background='#f4f1ea'; const c=html.querySelector('#nwpc-canvas'); if(c) c.style.background=''; await this._savePageData(p); });
-      // Клик по preview открывает color picker
       cPrev?.parentElement?.addEventListener('click', ()=>cInp.click());
     }
 
     /* --- Сетка / Привязка --- */
     html.querySelector('#ed-grid-toggle')?.addEventListener('click', e=>{ this._showGrid=!this._showGrid; e.currentTarget.classList.toggle('active',this._showGrid); const wrap=html.querySelector('#ed-canvas-wrap'); if(wrap) wrap.classList.toggle('nwpc-grid-hidden',!this._showGrid); });
-    html.querySelector('#ed-snap-toggle')?.addEventListener('click', e=>{ SNAP=!SNAP; e.currentTarget.classList.toggle('active',SNAP); ui.notifications.info(SNAP?'Привязка к сетке включена':'Привязка к сетке выключена'); });
+    html.querySelector('#ed-snap-toggle')?.addEventListener('click', e=>{
+      if(!isFeatureEnabled('gridSnap')){ ui.notifications.warn('Сетка и привязка отключены в настройках модуля.'); return; }
+      SNAP=!SNAP; e.currentTarget.classList.toggle('active',SNAP); ui.notifications.info(SNAP?'Привязка к сетке включена':'Привязка к сетке выключена');
+    });
 
     /* --- Зум --- */
     html.querySelector('#ed-zoom-in')?.addEventListener('click',  ()=>{ this._zoom=Math.min(3,this._zoom+0.1); this._applyZoom(html); });
@@ -172,6 +180,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     html.querySelector('#ed-publish-btn')?.addEventListener('click',  ()=>this._publish(html));
     html.querySelector('#ed-breaking-btn')?.addEventListener('click', ()=>this._openBreakingNewsDialog(html));
     html.querySelector('#ed-templates-btn')?.addEventListener('click',()=>this._openTemplateGallery(html));
+    html.querySelector('#ed-preview-as-btn')?.addEventListener('click',()=>this._openPreviewAs(html));
     html.querySelector('#ed-view-btn')?.addEventListener('click',     ()=>this._openViewer(html));
     html.querySelector('#ed-html2text-btn')?.addEventListener('click',()=>this._openHtml2Text(html));
     html.querySelector('#ed-reset-btn')?.addEventListener('click',    ()=>this._resetPage(html));
@@ -204,6 +213,12 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       if((e.ctrlKey||e.metaKey)&&(e.key==='y'||(e.key==='z'&&e.shiftKey))){ e.preventDefault(); this._redo(html); return; }
       if((e.ctrlKey||e.metaKey)&&e.key==='s'){ e.preventDefault(); this._save(html); return; }
       if((e.ctrlKey||e.metaKey)&&e.key==='d'&&this._selectedId){ e.preventDefault(); this._duplicateSelected(html); return; }
+      if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key==='T'){ e.preventDefault(); this._openTemplateGallery(html); return; }
+      if((e.ctrlKey||e.metaKey)&&e.shiftKey&&e.key==='S'){ e.preventDefault(); this._saveDraft(html); return; }
+      if((e.ctrlKey||e.metaKey)&&e.key==='Enter'){ e.preventDefault(); this._publish(html); return; }
+      if(e.altKey&&e.key==='1'){ e.preventDefault(); this._tab='canvas'; this.render({force:true}); return; }
+      if(e.altKey&&e.key==='2'){ e.preventDefault(); this._tab='archive'; this.render({force:true}); return; }
+      if(e.altKey&&e.key==='3'){ e.preventDefault(); this._tab='drafts'; this.render({force:true}); return; }
       if(e.key==='Escape'){ this._selectElement(null,html); return; }
       if(e.key==='f'&&!inInput){ this._autoFitZoom(html); return; }
       if(e.key==='g'&&!inInput){ html.querySelector('#ed-grid-toggle')?.click(); return; }
@@ -237,7 +252,6 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     /* --- Обновить кнопки выравнивания --- */
     this._updateAlignGroup(html);
 
-    // sync author badge
     this._updateAuthorBadge(html);
   }
 
@@ -252,10 +266,14 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     canvas.className=`nwpc-paper nwpc-paper-${page.paperStyle||'classic'}`;
     canvas.id='nwpc-canvas';
     this._applyCanvasStyle(canvas,page);
-    (page.elements||[]).forEach(el=>canvas.appendChild(this._createElementEl(el,html,w,h)));
+    (page.elements||[]).forEach(el=>{
+      const node = this._createElementEl(el,html,w,h);
+      if (this._hiddenIds.has(el.id)) node.style.display='none';
+      if (this._pinnedIds.has(el.id)) node.style.zIndex='9999';
+      canvas.appendChild(node);
+    });
     this._updateStatusBar(html);
 
-    // drop targets
     canvas.addEventListener('dragover', e=>{ e.preventDefault(); e.dataTransfer.dropEffect='copy'; canvas.classList.add('nwpc-drop-hover'); });
     canvas.addEventListener('dragleave', ()=>canvas.classList.remove('nwpc-drop-hover'));
     canvas.addEventListener('drop', e=>{ canvas.classList.remove('nwpc-drop-hover'); this._onCanvasDrop(e,html); });
@@ -398,7 +416,55 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _showPropsEmpty(html){
     const p=html.querySelector('#nwpc-props');
-    if(p) p.innerHTML=`<div class="nwpc-props-empty"><i class="fas fa-mouse-pointer"></i><p>Выберите элемент</p><small>Клик — выделить · Метка — переместить</small></div>`;
+    if(!p) return;
+    const page=this._getPageData();
+    const els=page.elements||[];
+    p.innerHTML=`
+      <div class="nwpc-props-empty" style="padding:10px 12px 4px;">
+        <i class="fas fa-mouse-pointer"></i><p>Выберите элемент</p><small>Клик — выделить · Метка — переместить</small>
+      </div>
+      <div class="nwpc-acc-section ${this._openSections.has('layerlist')?'open':''}" data-section="layerlist">
+        <div class="nwpc-acc-hdr"><i class="fas fa-layer-group"></i> Слои (${els.length}) <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
+        <div class="nwpc-acc-body">
+          <div id="nwpc-layer-list" style="display:flex;flex-direction:column;gap:2px;">
+            ${els.slice().reverse().map((el,ri)=>{
+              const i = els.length-1-ri; // реальный индекс (порядок отрисовки снизу-вверх)
+              const locked=this._lockedIds.has(el.id), hidden=this._hiddenIds.has(el.id), pinned=this._pinnedIds.has(el.id);
+              return `<div class="nwpc-layer-row" data-id="${el.id}" style="display:flex;align-items:center;gap:4px;padding:3px 4px;border-radius:3px;font-size:.76rem;cursor:pointer;${hidden?'opacity:.4;':''}">
+                <i class="${EL_ICONS[el.type]||'fas fa-square'}" style="width:14px;"></i>
+                <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${EL_LABELS[el.type]||el.type}</span>
+                <button class="nwpc-xs-btn nwpc-layer-pin"  title="Закрепить сверху" style="${pinned?'color:#ffd93d;':''}"><i class="fas fa-thumbtack"></i></button>
+                <button class="nwpc-xs-btn nwpc-layer-hide" title="Скрыть в редакторе"><i class="fas fa-eye${hidden?'-slash':''}"></i></button>
+                <button class="nwpc-xs-btn nwpc-layer-lock" title="Заблокировать"><i class="fas fa-${locked?'lock':'unlock'}"></i></button>
+              </div>`;
+            }).join('') || '<small style="color:#666;">Нет элементов на странице</small>'}
+          </div>
+        </div>
+      </div>
+    `;
+    p.querySelectorAll('.nwpc-acc-hdr').forEach(hdr=>hdr.addEventListener('click', ()=>{
+      const sec = hdr.parentElement;
+      sec.classList.toggle('open');
+      const name = sec.dataset.section;
+      if(sec.classList.contains('open')) this._openSections.add(name); else this._openSections.delete(name);
+    }));
+    p.querySelectorAll('.nwpc-layer-row').forEach(row=>{
+      const id=row.dataset.id;
+      row.addEventListener('click', e=>{ if(e.target.closest('button')) return; this._selectElement(id,html); });
+      row.querySelector('.nwpc-layer-pin')?.addEventListener('click', e=>{ e.stopPropagation(); this._togglePin(id,html); });
+      row.querySelector('.nwpc-layer-hide')?.addEventListener('click', e=>{ e.stopPropagation(); this._toggleHidden(id,html); });
+      row.querySelector('.nwpc-layer-lock')?.addEventListener('click', e=>{ e.stopPropagation(); this._toggleLock(id,html); this._showPropsEmpty(html); });
+    });
+  }
+
+  _togglePin(id,html){
+    if(this._pinnedIds.has(id)) this._pinnedIds.delete(id); else this._pinnedIds.add(id);
+    this._buildCanvas(html); this._showPropsEmpty(html);
+  }
+
+  _toggleHidden(id,html){
+    if(this._hiddenIds.has(id)) this._hiddenIds.delete(id); else this._hiddenIds.add(id);
+    this._buildCanvas(html); this._showPropsEmpty(html);
   }
 
   _showProps(html,id){
@@ -415,6 +481,8 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
         <i class="${EL_ICONS[elData.type]||'fas fa-square'}"></i>
         <span>${EL_LABELS[elData.type]||elData.type}</span>
         <div class="nwpc-props-header-actions">
+          <button class="nwpc-ph-btn nwpc-props-copystyle-btn" title="Скопировать стиль"><i class="fas fa-paint-roller"></i></button>
+          <button class="nwpc-ph-btn nwpc-props-pastestyle-btn" title="Вставить стиль" ${this._copiedStyle?'':'disabled'}><i class="fas fa-fill-drip"></i></button>
           <button class="nwpc-ph-btn nwpc-props-dup-btn"  title="Дублировать (Ctrl+D)"><i class="fas fa-copy"></i></button>
           <button class="nwpc-ph-btn nwpc-props-lock-btn" title="${isLocked?'Разблокировать':'Заблокировать'}"><i class="fas fa-${isLocked?'lock':'unlock'}"></i></button>
           <button class="nwpc-ph-btn nwpc-props-del-btn"  title="Удалить (Del)"><i class="fas fa-trash"></i></button>
@@ -422,7 +490,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       </div>
 
       <!-- СЕКЦИЯ: Геометрия -->
-      <div class="nwpc-acc-section open" data-section="geom">
+      <div class="nwpc-acc-section ${this._openSections.has('geom')?'open':''}" data-section="geom">
         <div class="nwpc-acc-hdr"><i class="fas fa-ruler-combined"></i> Геометрия <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
         <div class="nwpc-acc-body">
           <div class="nwpc-geom-grid">
@@ -440,7 +508,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       </div>
 
       <!-- СЕКЦИЯ: Вид элемента -->
-      <div class="nwpc-acc-section open" data-section="appearance">
+      <div class="nwpc-acc-section ${this._openSections.has('appearance')?'open':''}" data-section="appearance">
         <div class="nwpc-acc-hdr"><i class="fas fa-paint-brush"></i> Оформление <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
         <div class="nwpc-acc-body">
           <!-- Фон -->
@@ -480,7 +548,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
       <!-- СЕКЦИЯ: Цвет текста (не для rule / image) -->
       ${!['rule','image'].includes(elData.type)?`
-      <div class="nwpc-acc-section open" data-section="textcolor">
+      <div class="nwpc-acc-section ${this._openSections.has('textcolor')?'open':''}" data-section="textcolor">
         <div class="nwpc-acc-hdr"><i class="fas fa-font"></i> Цвет текста <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
         <div class="nwpc-acc-body">
           <div class="nwpc-color-row">
@@ -492,7 +560,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       </div>`:``}
 
       <!-- СЕКЦИЯ: Содержимое -->
-      <div class="nwpc-acc-section open" data-section="content">
+      <div class="nwpc-acc-section ${this._openSections.has('content')?'open':''}" data-section="content">
         <div class="nwpc-acc-hdr"><i class="fas fa-edit"></i> Содержимое <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
         <div class="nwpc-acc-body">
           ${this._buildPropsHTML(elData)}
@@ -500,7 +568,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       </div>
 
       <!-- СЕКЦИЯ: Слои и выравнивание -->
-      <div class="nwpc-acc-section" data-section="layers">
+      <div class="nwpc-acc-section ${this._openSections.has('layers')?'open':''}" data-section="layers">
         <div class="nwpc-acc-hdr"><i class="fas fa-layer-group"></i> Слои и выравнивание <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
         <div class="nwpc-acc-body">
           <div style="display:flex;gap:4px;flex-wrap:wrap;">
@@ -519,13 +587,15 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       </div>
 
       <!-- СЕКЦИЯ: Видимость (Block B) -->
-      <div class="nwpc-acc-section" data-section="visibility">
+      <div class="nwpc-acc-section ${this._openSections.has('visibility')?'open':''}" data-section="visibility">
         <div class="nwpc-acc-hdr"><i class="fas fa-eye"></i> Видимость <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
         <div class="nwpc-acc-body">
           <select id="nwpc-vis-mode" class="nwpc-prop-input" style="width:100%;">
             <option value="all"    ${(elData.visibility??'all')==='all'    ?'selected':''}>Все игроки</option>
             <option value="gm"     ${elData.visibility==='gm'             ?'selected':''}>Только GM</option>
             <option value="role"   ${elData.visibility==='role'           ?'selected':''}>По роли</option>
+            <option value="users"  ${elData.visibility==='users'          ?'selected':''}>Выбранные игроки</option>
+            <option value="trigger"${elData.visibility==='trigger'        ?'selected':''}>По состоянию персонажа</option>
             <option value="reveal" ${elData.visibility==='reveal'         ?'selected':''}>Скрыт / Reveal on click</option>
           </select>
           <div id="nwpc-vis-role-row" style="display:${elData.visibility==='role'?'block':'none'};margin-top:6px;">
@@ -536,15 +606,74 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
               <option value="3" ${elData.visibilityRole===3?'selected':''}>Assistant</option>
             </select>
           </div>
+          <div id="nwpc-vis-trigger-row" style="display:${elData.visibility==='trigger'?'block':'none'};margin-top:6px;">
+            <label style="font-size:.72rem;color:#888;">Тип условия:</label>
+            <select id="nwpc-trigger-type" class="nwpc-prop-input" style="width:100%;margin-bottom:4px;">
+              <option value="effect" ${(elData.triggerType??'effect')==='effect'?'selected':''}>Эффект/статус на персонаже</option>
+              <option value="flag"   ${elData.triggerType==='flag'?'selected':''}>Флаг на персонаже</option>
+            </select>
+            <input id="nwpc-trigger-key" type="text" class="nwpc-mini-inp" style="width:100%;" placeholder="например: madness" value="${elData.triggerKey||''}">
+            <small style="color:#888;display:block;margin-top:2px;">Виден, только если у персонажа игрока активен указанный эффект/статус или флаг — основа для «Искажённого восприятия».</small>
+          </div>
+          <div id="nwpc-vis-users-row" style="display:${elData.visibility==='users'?'block':'none'};margin-top:6px;">
+            <label style="font-size:.72rem;color:#888;">Показывать только этим игрокам:</label>
+            <div style="display:flex;flex-direction:column;gap:3px;max-height:120px;overflow:auto;">
+              ${game.users.filter(u=>!u.isGM).map(u=>`
+                <label style="display:flex;align-items:center;gap:5px;font-size:.78rem;">
+                  <input type="checkbox" class="nwpc-vis-user-cb" value="${u.id}" ${(elData.visibilityUserIds||[]).includes(u.id)?'checked':''}>
+                  ${u.name}
+                </label>`).join('') || '<small style="color:#888;">Нет игроков в мире</small>'}
+            </div>
+          </div>
+          <div style="margin-top:8px;border-top:1px solid #333;padding-top:6px;">
+            <label style="font-size:.72rem;color:#888;">Заметка для GM (игрокам не видна):</label>
+            <textarea id="nwpc-gm-note" rows="2" class="nwpc-mini-inp" style="width:100%;" placeholder="Кому предназначен, почему отличается, какой триггер, что видит игрок...">${elData.gmNote||''}</textarea>
+          </div>
+        </div>
+      </div>
+
+      <!-- СЕКЦИЯ: Персональные варианты -->
+      <div class="nwpc-acc-section ${this._openSections.has('variants')?'open':''}" data-section="variants">
+        <div class="nwpc-acc-hdr"><i class="fas fa-user-secret"></i> Варианты для игроков <i class="nwpc-acc-arrow fas fa-chevron-down"></i></div>
+        <div class="nwpc-acc-body">
+          <small style="color:#888;display:block;margin-bottom:6px;">Отдельный текст для конкретного игрока или роли — остальные видят обычную версию.</small>
+          <div id="nwpc-variants-list">
+            ${Object.entries(elData.variants||{}).map(([key,ov])=>{
+              const label = key.startsWith('user:')
+                ? (game.users.get(key.slice(5))?.name || key)
+                : `Роль ≥ ${key.slice(5)}`;
+              return `<div class="nwpc-variant-row" data-key="${key}" style="border:1px solid #333;border-radius:4px;padding:6px;margin-bottom:6px;">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+                  <strong style="font-size:.76rem;">${label}</strong>
+                  <button class="nwpc-xs-btn nwpc-variant-del" title="Удалить вариант"><i class="fas fa-trash"></i></button>
+                </div>
+                <textarea class="nwpc-variant-text" rows="2" style="width:100%;" placeholder="Текст для этого варианта...">${ov.text||''}</textarea>
+              </div>`;
+            }).join('') || '<small style="color:#666;">Вариантов пока нет</small>'}
+          </div>
+          <div style="display:flex;gap:4px;margin-top:4px;">
+            <select id="nwpc-variant-target" class="nwpc-prop-input" style="flex:1;">
+              ${game.users.filter(u=>!u.isGM).map(u=>`<option value="user:${u.id}">${u.name}</option>`).join('')}
+              <option value="role:1">Все Player</option>
+              <option value="role:2">Все Trusted</option>
+              <option value="role:3">Все Assistant</option>
+              ${elData.triggerKey?`<option value="trigger:${elData.triggerKey}">Искажённая версия (при триггере «${elData.triggerKey}»)</option>`:''}
+            </select>
+            <button class="nwpc-sm-btn" id="nwpc-variant-add"><i class="fas fa-plus"></i> Добавить</button>
+          </div>
         </div>
       </div>
     `;
 
-    // LISTENERS
 
     /* Аккордеон */
     panel.querySelectorAll('.nwpc-acc-hdr').forEach(hdr=>{
-      hdr.addEventListener('click', ()=>{ hdr.parentElement.classList.toggle('open'); });
+      hdr.addEventListener('click', ()=>{
+        const sec = hdr.parentElement;
+        sec.classList.toggle('open');
+        const name = sec.dataset.section;
+        if(sec.classList.contains('open')) this._openSections.add(name); else this._openSections.delete(name);
+      });
     });
 
     /* Геометрия */
@@ -662,7 +791,6 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     /* Выбор файла */
     panel.querySelector('#nwpc-pick-file-btn')?.addEventListener('click', ()=>this._pickLocalFile(elData,html,id));
 
-    // actor-link buttons
     panel.querySelector('#nwpc-actor-refresh-btn')?.addEventListener('click', async()=>{
       const actor = await fromUuid(elData.props.actorUuid);
       if(!actor){ ui.notifications.warn('Актёр не найден.'); return; }
@@ -695,6 +823,19 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     panel.querySelector('.nwpc-props-dup-btn')?.addEventListener('click',  ()=>this._duplicateSelected(html));
     panel.querySelector('.nwpc-props-lock-btn')?.addEventListener('click', ()=>this._toggleLock(id,html));
     panel.querySelector('.nwpc-props-del-btn')?.addEventListener('click',  ()=>this._deleteSelected(html));
+    panel.querySelector('.nwpc-props-copystyle-btn')?.addEventListener('click', ()=>{
+      this._copiedStyle = JSON.parse(JSON.stringify(elData.style||{}));
+      ui.notifications.info('Стиль скопирован');
+      this._showProps(html,id);
+    });
+    panel.querySelector('.nwpc-props-pastestyle-btn')?.addEventListener('click', ()=>{
+      if(!this._copiedStyle) return;
+      elData.style = { ...(elData.style||{}), ...JSON.parse(JSON.stringify(this._copiedStyle)) };
+      this._refreshElContent(html,id,elData);
+      this._scheduleSave(html,true);
+      this._showProps(html,id);
+      ui.notifications.info('Стиль применён');
+    });
 
     /* color swatch click opens color input */
     panel.querySelectorAll('.nwpc-color-swatch-btn').forEach(sw=>sw.addEventListener('click', ()=>sw.querySelector('input[type="color"]')?.click()));
@@ -702,18 +843,23 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     /* text-align buttons */
     this._attachTextAlignListeners(panel, elData, html, id);
 
-    // visibility controls
     const visSel = panel.querySelector('#nwpc-vis-mode');
     const visRoleRow = panel.querySelector('#nwpc-vis-role-row');
     const visRoleSel = panel.querySelector('#nwpc-vis-role');
+    const visUsersRow = panel.querySelector('#nwpc-vis-users-row');
+    const visTriggerRow = panel.querySelector('#nwpc-vis-trigger-row');
     visSel?.addEventListener('change', ()=>{
       elData.visibility = visSel.value;
       if(visRoleRow) visRoleRow.style.display = visSel.value==='role'?'block':'none';
+      if(visUsersRow) visUsersRow.style.display = visSel.value==='users'?'block':'none';
+      if(visTriggerRow) visTriggerRow.style.display = visSel.value==='trigger'?'block':'none';
       /* Rebuild label badge */
       const labelEl = html.querySelector(`[data-el-id="${id}"] .nwpc-el-label`);
       if(labelEl) labelEl.innerHTML = `<i class="${EL_ICONS[elData.type]||'fas fa-square'}"></i>${EL_LABELS[elData.type]||elData.type}${
         elData.visibility==='gm'     ? ' <i class="fas fa-user-shield nwpc-vis-badge" style="color:#ff6b6b;"></i>'
         : elData.visibility==='role'   ? ' <i class="fas fa-users nwpc-vis-badge" style="color:#ffd93d;"></i>'
+        : elData.visibility==='users'  ? ' <i class="fas fa-user-check nwpc-vis-badge" style="color:#9b59b6;"></i>'
+        : elData.visibility==='trigger'? ' <i class="fas fa-brain nwpc-vis-badge" style="color:#e91e63;"></i>'
         : elData.visibility==='reveal' ? ' <i class="fas fa-question nwpc-vis-badge" style="color:#4a90d9;"></i>'
         : ''
       }`;
@@ -722,6 +868,37 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     visRoleSel?.addEventListener('change', ()=>{
       elData.visibilityRole = parseInt(visRoleSel.value);
       this._scheduleSave(html,true);
+    });
+    panel.querySelector('#nwpc-trigger-type')?.addEventListener('change', e=>{ elData.triggerType = e.target.value; this._scheduleSave(html,true); });
+    panel.querySelector('#nwpc-trigger-key')?.addEventListener('input', e=>{ elData.triggerKey = e.target.value; this._scheduleSave(html); });
+    panel.querySelector('#nwpc-gm-note')?.addEventListener('input', e=>{ elData.gmNote = e.target.value; this._scheduleSave(html); });
+    panel.querySelectorAll('.nwpc-vis-user-cb').forEach(cb=>{
+      cb.addEventListener('change', ()=>{
+        const ids = new Set(elData.visibilityUserIds||[]);
+        if(cb.checked) ids.add(cb.value); else ids.delete(cb.value);
+        elData.visibilityUserIds = Array.from(ids);
+        this._scheduleSave(html,true);
+      });
+    });
+
+    panel.querySelectorAll('.nwpc-variant-row').forEach(row=>{
+      const key = row.dataset.key;
+      row.querySelector('.nwpc-variant-text')?.addEventListener('input', e=>{
+        if(!elData.variants) elData.variants={};
+        elData.variants[key] = { ...(elData.variants[key]||{}), text: e.target.value };
+        this._scheduleSave(html);
+      });
+      row.querySelector('.nwpc-variant-del')?.addEventListener('click', ()=>{
+        if(elData.variants) delete elData.variants[key];
+        this._scheduleSave(html,true); this._showProps(html,id);
+      });
+    });
+    panel.querySelector('#nwpc-variant-add')?.addEventListener('click', ()=>{
+      const key = panel.querySelector('#nwpc-variant-target')?.value; if(!key) return;
+      if(!elData.variants) elData.variants={};
+      if(elData.variants[key]) return;
+      elData.variants[key] = { text: p.text || '' };
+      this._scheduleSave(html,true); this._showProps(html,id);
     });
   }
 
@@ -945,11 +1122,8 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     });
   }
 
-  // --- RENDER ELEMENT HTML ---
 
   _renderElHTML(el){
-    // Делегируем в шаренный рендерер из newspaper.mjs
-    // Для редактора добавляем placeholder-тексты когда поля пустые
     const p = el.props || {};
     const withPlaceholders = structuredClone ? structuredClone(el) : JSON.parse(JSON.stringify(el));
     const pp = withPlaceholders.props;
@@ -1080,33 +1254,32 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _pushHistory(){
     const snap=JSON.parse(JSON.stringify(this._getPageData()));
-    this._history=this._history.slice(0,this._historyIdx+1);
     this._history.push(snap);
-    if(this._history.length>this._maxHistory) this._history.shift();
-    else this._historyIdx++;
     const html=this.element; if(html){ this._updateUndoRedoBtns(html); this._updateStatusBar(html); }
   }
 
   async _undo(html){
-    if(this._historyIdx<=0){ ui.notifications.info('Нечего отменять'); return; }
-    this._historyIdx--;
-    await this._savePageData(this._history[this._historyIdx]);
+    if (!isFeatureEnabled('actionHistory')) { ui.notifications.warn('История действий отключена в настройках модуля.'); return; }
+    if(!this._history.canUndo()){ ui.notifications.info('Нечего отменять'); return; }
+    const state=this._history.undo();
+    await this._savePageData(state);
     this._selectedId=null; this._buildCanvas(html); this._showPropsEmpty(html); this._applyZoom(html);
     this._updateUndoRedoBtns(html); this._updateStatusBar(html);
   }
 
   async _redo(html){
-    if(this._historyIdx>=this._history.length-1){ ui.notifications.info('Нечего повторять'); return; }
-    this._historyIdx++;
-    await this._savePageData(this._history[this._historyIdx]);
+    if (!isFeatureEnabled('actionHistory')) { ui.notifications.warn('История действий отключена в настройках модуля.'); return; }
+    if(!this._history.canRedo()){ ui.notifications.info('Нечего повторять'); return; }
+    const state=this._history.redo();
+    await this._savePageData(state);
     this._selectedId=null; this._buildCanvas(html); this._showPropsEmpty(html); this._applyZoom(html);
     this._updateUndoRedoBtns(html); this._updateStatusBar(html);
   }
 
   _updateUndoRedoBtns(html){
     const ub=html?.querySelector('#ed-undo-btn'), rb=html?.querySelector('#ed-redo-btn');
-    if(ub) ub.disabled=this._historyIdx<=0;
-    if(rb) rb.disabled=this._historyIdx>=this._history.length-1;
+    if(ub) ub.disabled=!this._history.canUndo();
+    if(rb) rb.disabled=!this._history.canRedo();
   }
 
   // --- STATUS BAR ---
@@ -1118,7 +1291,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const sb_el=html?.querySelector('#sb-elements'); if(sb_el) sb_el.textContent=`Элементов: ${(page.elements||[]).length}`;
     const sb_sz=html?.querySelector('#sb-page-size'); if(sb_sz) sb_sz.textContent=`${page.pageSize||'A4'}  ${w}×${h}px`;
     const sb_sel=html?.querySelector('#sb-selected'); if(sb_sel) sb_sel.textContent=selEl?`${EL_LABELS[selEl.type]||selEl.type}  x:${selEl.x} y:${selEl.y} w:${selEl.w} h:${selEl.h}`:'';
-    const sb_hist=html?.querySelector('#sb-history'); if(sb_hist) sb_hist.textContent=`Шагов: ${this._historyIdx+1}/${this._history.length}`;
+    const sb_hist=html?.querySelector('#sb-history'); if(sb_hist) sb_hist.textContent=`Шагов: ${this._history.index+1}/${this._history.length}`;
   }
 
   _updateCursorCoords(e,html){
@@ -1247,7 +1420,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     if(!LiveNewspaper.canDo('Edit')){ if(!silent) ui.notifications.warn('Недостаточно прав.'); return; }
     await this._savePageData(this._getPageData());
     this._lastSaveTs = Date.now();
-    await LiveNewspaper.saveAutoDraft(this._currentPage, this._getPageData());
+    if (isFeatureEnabled('autoDraft')) await LiveNewspaper.saveAutoDraft(this._currentPage, this._getPageData());
     this._updateSaveIndicator(html ?? this.element);
     if(!silent){ ui.notifications.info('Сохранено!'); }
   }
@@ -1298,10 +1471,40 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     ui.notifications.info('Черновик сохранён!');
   }
 
+  _runSafetyChecks() {
+    const page = this._getPageData();
+    const warnings = [];
+    for (const el of (page.elements || [])) {
+      const p = el.props || {};
+      const label = EL_LABELS[el.type] || el.type;
+      if (['headline','body','quote','box','ad','byline'].includes(el.type) && !String(p.text||'').trim()) {
+        warnings.push(`«${label}» — пустое текстовое поле`);
+      }
+      if (el.type === 'image') {
+        if (!p.url) warnings.push(`«${label}» — не выбрано изображение`);
+        else if (p.url.startsWith('http') && !p.url.startsWith(location.origin)) {
+          warnings.push(`«${label}» — внешняя ссылка на изображение, может не открыться у игроков`);
+        }
+      }
+      if (p.text && p.text.length > 4000) {
+        warnings.push(`«${label}» — очень длинный текст (${p.text.length} симв.), возможны проблемы с вёрсткой`);
+      }
+    }
+    return warnings;
+  }
+
   async _publish(html){
     if(!LiveNewspaper.canDo('Publish')){ ui.notifications.warn('Недостаточно прав.'); return; }
 
-    // Предупреждение перед публикацией — это необратимое действие
+    const warnings = this._runSafetyChecks();
+    if (warnings.length) {
+      const proceed = await DialogV2.confirm({
+        window: { title: 'Проверка перед публикацией' },
+        content: `<ul style="margin:0;padding-left:18px;">${warnings.map(w=>`<li>${w}</li>`).join('')}</ul><p>Опубликовать несмотря на предупреждения?</p>`,
+      });
+      if (!proceed) return;
+    }
+
     const confirmed = await DialogV2.confirm({
       window: { title: game.i18n.localize('cmt.publish.confirmTitle') },
       content: `<p>${game.i18n.localize('cmt.publish.confirmBody')}</p>`,
@@ -1355,6 +1558,20 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
           <label style="display:flex;align-items:center;gap:6px;font-size:.8rem;color:#ddd;"><input type="checkbox" id="pub-sound"> Звуковое уведомление</label>
           <label style="display:flex;align-items:center;gap:6px;font-size:.8rem;color:#ddd;"><input type="checkbox" id="pub-journal"> Сохранить в Журнал кампании</label>
         </div>
+        <div style="border-top:1px solid #333;padding-top:8px;">
+          <label style="font-size:.75rem;color:#aaa;display:block;margin-bottom:4px;"><i class="fas fa-envelope"></i> Список рассылки (персонально)</label>
+          <table style="width:100%;font-size:.76rem;color:#ddd;border-collapse:collapse;">
+            <thead><tr style="color:#888;"><th style="text-align:left;font-weight:400;">Игрок</th><th>Показать</th><th>В Журнал</th></tr></thead>
+            <tbody>
+              ${game.users.filter(u=>!u.isGM).map(u=>`
+                <tr data-uid="${u.id}">
+                  <td>${u.name}</td>
+                  <td style="text-align:center;"><input type="checkbox" class="pub-ml-show"></td>
+                  <td style="text-align:center;"><input type="checkbox" class="pub-ml-journal"></td>
+                </tr>`).join('') || `<tr><td colspan="3" style="color:#666;">Нет игроков в мире</td></tr>`}
+            </tbody>
+          </table>
+        </div>
       </div>`,
       buttons:[
         {
@@ -1380,7 +1597,16 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
               if(name!==null) await LiveNewspaper.archivePage(this._getPageData(), name||`Выпуск ${new Date().toLocaleDateString('ru')}`);
             }
 
-            if(doJournal) await this._publishToJournal(this._getPageData(), title);
+            if(doJournal && isFeatureEnabled('publishToJournal')) await this._publishToJournal(this._getPageData(), title);
+
+            const mlShowIds    = Array.from(root?.querySelectorAll('.pub-ml-show:checked')    || []).map(cb=>cb.closest('tr').dataset.uid);
+            const mlJournalIds = Array.from(root?.querySelectorAll('.pub-ml-journal:checked') || []).map(cb=>cb.closest('tr').dataset.uid);
+            if (mlShowIds.length) openViewerForUsers(mlShowIds);
+            if (mlJournalIds.length && isFeatureEnabled('publishToJournal')) {
+              const { pageToJournalHTML } = await import('../newspaper.mjs');
+              const journalContent = pageToJournalHTML(this._getPageData());
+              for (const uid of mlJournalIds) createPersonalJournalForUser(uid, title, journalContent);
+            }
 
             /* Отправка в чат */
             const whisper = target==='players'
@@ -1389,17 +1615,19 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
                 ? game.users.filter(u=>u.isGM).map(u=>u.id)
                 : null;
 
-            await ChatMessage.create({
-              content:`<div style="font-family:'Georgia',serif;border:1px solid #8b2e2e;padding:12px;background:#fdf8f0;border-radius:4px;max-width:380px;">
-                <div style="font-weight:bold;font-size:1.05em;color:#8b2e2e;">📰 ${esc(title)}</div>
-                <div style="color:#444;margin-top:5px;font-size:.88em;">${esc(desc)}</div>
-                <button class="cmt-open-newspaper-btn" style="margin-top:10px;padding:5px 14px;background:#8b2e2e;color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:.82em;">${esc(btnText)}</button>
-              </div>`,
-              speaker:{alias:'Редакция'},
-              whisper,
-            });
+            if (isFeatureEnabled('publishToChat')) {
+              await ChatMessage.create({
+                content:`<div style="font-family:'Georgia',serif;border:1px solid #8b2e2e;padding:12px;background:#fdf8f0;border-radius:4px;max-width:380px;">
+                  <div style="font-weight:bold;font-size:1.05em;color:#8b2e2e;">📰 ${esc(title)}</div>
+                  <div style="color:#444;margin-top:5px;font-size:.88em;">${esc(desc)}</div>
+                  <button class="cmt-open-newspaper-btn" style="margin-top:10px;padding:5px 14px;background:#8b2e2e;color:#fff;border:none;border-radius:3px;cursor:pointer;font-family:inherit;font-size:.82em;">${esc(btnText)}</button>
+                </div>`,
+                speaker:{alias:'Редакция'},
+                whisper,
+              });
+            }
 
-            if(doSound) foundry.audio.AudioHelper.play({src:'modules/campaign-master-tools/sounds/notify.mp3',volume:0.125,autoplay:true,loop:false},true);
+            if(doSound && isFeatureEnabled('soundsAnimations')) foundry.audio.AudioHelper.play({src:'modules/campaign-master-tools/sounds/notify.mp3',volume:0.125,autoplay:true,loop:false},true);
             ui.notifications.info('Газета выпущена!');
           },
         },
@@ -1435,16 +1663,26 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
   _pickLocalFile(elData,html,id){
     const input=document.createElement('input'); input.type='file'; input.accept='image/*'; input.style.display='none';
     document.body.appendChild(input);
-    input.addEventListener('change', e=>{
-      const file=e.target.files[0]; if(!file) return;
-      const reader=new FileReader();
-      reader.onload=ev=>{ elData.props.url=ev.target.result; this._refreshElContent(html,id,elData); const u=html.querySelector('#nwpc-props input[data-prop="url"]'); if(u) u.value='[base64]'; this._scheduleSave(html); };
-      reader.readAsDataURL(file); document.body.removeChild(input);
+    input.addEventListener('change', async e=>{
+      const file=e.target.files[0]; document.body.removeChild(input);
+      if(!file) return;
+      try {
+        const res = await uploadToDataDir(file);
+        if (!res?.path) throw new Error('Не удалось загрузить файл');
+        elData.props.url = res.path;
+        this._refreshElContent(html,id,elData);
+        const u = html.querySelector('#nwpc-props input[data-prop="url"]');
+        if (u) u.value = res.path;
+        this._scheduleSave(html);
+      } catch(err) {
+        console.error('[CMT] Ошибка загрузки изображения:', err);
+        ui.notifications.error('Не удалось загрузить изображение: ' + err.message);
+      }
     });
     input.click();
   }
 
-  _exportJSON(){ LiveNewspaper.exportJSON(); }
+  _exportJSON(){ if(!isFeatureEnabled('jsonExport')){ ui.notifications.warn('Экспорт JSON отключён в настройках модуля.'); return; } LiveNewspaper.exportJSON(); }
 
   _importJSON(html){
     const dlg=new foundry.applications.api.DialogV2({
@@ -1465,7 +1703,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
             const text=dialog.element?.querySelector('#imp-json-ta')?.value?.trim();
             if(!text) return;
             const ok=await LiveNewspaper.importJSON(text);
-            if(ok){ this._currentPage=0; this._selectedId=null; this._history=[]; this._historyIdx=-1; this.render({force:true}); }
+            if(ok){ this._currentPage=0; this._selectedId=null; this._history.reset(); this.render({force:true}); }
           },
         },
         {action:'cancel',label:'Отмена',icon:'fas fa-times'},
@@ -1480,7 +1718,6 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   _openHtml2Text(html){
 
-    // DIALOG
     const dlg = new foundry.applications.api.DialogV2({
       window:{ title:'HTML → Текст', icon:'fas fa-code' },
       content:`<div style="display:flex;flex-direction:column;gap:8px;height:480px;padding:8px;">
@@ -1619,6 +1856,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
   // --- BLOCK A: DROP HANDLER ---
 
   async _onCanvasDrop(event, html) {
+    if (!isFeatureEnabled('dndImport')) { ui.notifications.warn('Перетаскивание объектов отключено в настройках модуля.'); return; }
     const canvas = html.querySelector('#nwpc-canvas'); if(!canvas) return;
     const rect = canvas.getBoundingClientRect();
     let dropX = Math.round((event.clientX - rect.left) / this._zoom);
@@ -1639,20 +1877,17 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const {w:cw, h:ch} = this._getCanvasSize(page);
     const newEls = [];
 
-    // Raw image URL or Tile
     if(data.type === 'Tile' || data.type === '_rawImage') {
       const src = data.img || data.src;
       const url = await this._cropImage(src);
       newEls.push({ type:'image', x:Math.min(dropX,cw-300), y:Math.min(dropY,ch-250), w:300, h:250, props:{ url, caption:'', scale:100, borderStyle:'none' }, style:{} });
     }
 
-    // File blob
     else if(data.type === '_fileBlob') {
       const url = await new Promise(res=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.readAsDataURL(data.file); });
       newEls.push({ type:'image', x:Math.min(dropX,cw-300), y:Math.min(dropY,ch-250), w:300, h:250, props:{ url, caption:'', scale:100, borderStyle:'none' }, style:{} });
     }
 
-    // Actor
     else if(data.type === 'Actor') {
       const actor = await fromUuid(data.uuid);
       if(!actor) { ui.notifications.warn('Актёр не найден.'); return; }
@@ -1663,7 +1898,6 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
       newEls.push({ type:'byline', x:Math.min(dropX,cw-200), y:Math.min(dropY+210,ch-28), w:200, h:28, props:{ text: actor.name, textColor:'', actorUuid: actor.uuid }, style:{} });
     }
 
-    // JournalEntry
     else if(data.type === 'JournalEntry' || data.type === 'JournalEntryPage') {
       const doc = await fromUuid(data.uuid);
       if(!doc) { ui.notifications.warn('Запись журнала не найдена.'); return; }
@@ -1693,6 +1927,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async _cropImage(src) {
     if(!src) return src;
+    if(!isFeatureEnabled('autoCropImages')) return src;
     return new Promise(resolve => {
       const img = new Image();
       img.crossOrigin = 'anonymous';
@@ -1721,7 +1956,7 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     });
   }
 
-  // --- BLOCK A+D: HTML → WYSIWYG (extracted from _openHtml2Text) ---
+  // --- BLOCK A+D: HTML → WYSIWYG ---
 
   _html2wysiwyg(rawHtml) {
     if(!rawHtml || !rawHtml.trim()) return '';
@@ -1865,17 +2100,90 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   // --- TEMPLATE GALLERY ---
 
+  // --- ПРЕДПРОСМОТР ГЛАЗАМИ ИГРОКА ---
+
+  async _openPreviewAs(html) {
+    const page = this._getPageData();
+    const players = game.users.filter(u => !u.isGM);
+
+    const renderFor = (fakeUser) => {
+      const filtered = (page.elements||[]).filter(el => {
+        const v = el.visibility ?? 'all';
+        if (v === 'gm') return false;
+        if (v === 'role') return fakeUser.role >= (el.visibilityRole ?? 1);
+        if (v === 'users') return (el.visibilityUserIds||[]).includes(fakeUser.id);
+        if (v === 'trigger') return !!fakeUser.character;
+        if (v === 'reveal') return el.revealed === true;
+        return true;
+      }).map(el => resolveElementForUser(el, fakeUser) || el);
+
+      if (!filtered.length) return '<p style="color:#888;text-align:center;padding:20px;">Игрок не увидит на этой странице ни одного элемента.</p>';
+      return filtered.map(el => `<div style="border:1px solid #333;border-radius:4px;padding:8px 10px;margin-bottom:6px;background:#161616;">
+        <div style="font-size:.68rem;color:#888;margin-bottom:3px;">${EL_LABELS[el.type]||el.type}</div>
+        <div style="color:#ddd;font-size:.85rem;">${renderElementHTML(el)}</div>
+      </div>`).join('');
+    };
+
+    const madnessCharacter = { statuses: { has: () => true }, effects: [], getFlag: () => true };
+
+    const dlg = new foundry.applications.api.DialogV2({
+      window: { title: 'Предпросмотр глазами игрока', icon: 'fas fa-user-secret' },
+      content: `
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap;">
+          <select id="prev-mode" class="nwpc-prop-input" style="flex:1;min-width:180px;">
+            <option value="regular">Обычный игрок (без персонажа)</option>
+            ${players.map(u=>`<option value="user:${u.id}">${u.name}</option>`).join('')}
+            <option value="madness">Персонаж с активным «безумием» (любой триггер)</option>
+          </select>
+        </div>
+        <div id="prev-body" style="max-height:420px;overflow:auto;"></div>
+      `,
+      buttons: [{ action:'close', label:'Закрыть', icon:'fas fa-times' }],
+    });
+
+    dlg.addEventListener('render', () => {
+      const root = dlg.element; if(!root) return;
+      const body = root.querySelector('#prev-body');
+      const sel = root.querySelector('#prev-mode');
+      const update = () => {
+        let fakeUser;
+        if (sel.value === 'regular') fakeUser = { isGM:false, id:'__preview__', role:1, character:null };
+        else if (sel.value === 'madness') fakeUser = { isGM:false, id:'__preview__', role:1, character: madnessCharacter };
+        else fakeUser = game.users.get(sel.value.slice(5)) || { isGM:false, id:'__preview__', role:1, character:null };
+        if (body) body.innerHTML = renderFor(fakeUser);
+      };
+      sel.addEventListener('change', update);
+      update();
+    });
+    dlg.render(true);
+  }
+
   async _openTemplateGallery(html) {
+    if (!isFeatureEnabled('templates')) { ui.notifications.warn('Галерея шаблонов отключена в настройках модуля.'); return; }
     const { TEMPLATES } = await import('../templates.mjs');
-    const grid = TEMPLATES.map(t => `
-      <div class="nwpc-tpl-card" data-id="${t.id}" title="${t.label}" style="
-        cursor:pointer;padding:14px 8px;border:2px solid #333;border-radius:6px;
+    const customs = LiveNewspaper.getCustomTemplates();
+    const favIds = new Set(LiveNewspaper.getFavoriteTemplateIds());
+    const all = [...TEMPLATES, ...customs];
+    all.sort((a,b) => (favIds.has(b.id)?1:0) - (favIds.has(a.id)?1:0));
+
+    const GENRE_LABELS = {
+      news: 'Обычные новости', official: 'Официальные бумаги', crime: 'Розыск и преступления',
+      secret: 'Секретное', urgent: 'Срочные выпуски', horror: 'Хоррор и безумие', gossip: 'Слухи',
+    };
+    const genresPresent = [...new Set(all.map(t => t.genre).filter(Boolean))];
+
+    const cardHTML = t => `
+      <div class="nwpc-tpl-card" data-id="${t.id}" data-genre="${t.genre||''}" data-custom="${t.custom?'1':'0'}" title="${t.label}" style="
+        position:relative;cursor:pointer;padding:14px 8px;border:2px solid #333;border-radius:6px;
         text-align:center;background:#1a1a1a;transition:border-color .15s;display:flex;
         flex-direction:column;align-items:center;gap:6px;">
+        <button class="nwpc-tpl-fav" data-id="${t.id}" title="В избранное" style="position:absolute;top:4px;right:4px;background:none;border:none;cursor:pointer;color:${favIds.has(t.id)?'#ffd93d':'#555'};"><i class="fas fa-star"></i></button>
+        ${t.custom?`<button class="nwpc-tpl-del" data-id="${t.id}" title="Удалить шаблон" style="position:absolute;top:4px;left:4px;background:none;border:none;cursor:pointer;color:#a55;"><i class="fas fa-trash"></i></button>`:''}
         <i class="${t.icon}" style="font-size:1.8rem;color:#c9a84c;"></i>
         <div style="font-size:.78rem;color:#ddd;font-weight:600;">${t.label}</div>
-        <div style="font-size:.68rem;color:#888;">${t.paperStyle}</div>
-      </div>`).join('');
+        <div style="font-size:.68rem;color:#888;">${t.paperStyle}${t.custom?' · свой':''}</div>
+      </div>`;
+    const grid = all.map(cardHTML).join('');
 
     const dlg = new foundry.applications.api.DialogV2({
       window: { title: game.i18n.localize('cmt.templates.title'), icon: 'fas fa-th-large' },
@@ -1883,6 +2191,16 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
         <p style="font-size:.75rem;color:#aaa;margin:0 0 10px;">
           ${game.i18n.localize('cmt.templates.hint')}
         </p>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;">
+          <label style="font-size:.78rem;color:#aaa;white-space:nowrap;"><i class="fas fa-filter"></i> Какая нужна газета?</label>
+          <select id="nwpc-tpl-genre" class="nwpc-prop-input" style="flex:1;">
+            <option value="">Показать все</option>
+            ${genresPresent.map(g=>`<option value="${g}">${GENRE_LABELS[g]||g}</option>`).join('')}
+          </select>
+        </div>
+        <button id="nwpc-tpl-save-current" style="margin-bottom:10px;padding:6px 12px;background:#2a2a1a;border:1px solid #665;color:#ddb;border-radius:4px;cursor:pointer;font-size:.78rem;">
+          <i class="fas fa-save"></i> Сохранить текущую страницу как шаблон
+        </button>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;" id="nwpc-tpl-grid">
           ${grid}
         </div>`,
@@ -1891,15 +2209,45 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
     dlg.addEventListener('render', () => {
       const root = dlg.element; if(!root) return;
+      root.querySelector('#nwpc-tpl-genre')?.addEventListener('change', e => {
+        const g = e.target.value;
+        root.querySelectorAll('.nwpc-tpl-card').forEach(card => {
+          card.style.display = (!g || card.dataset.genre === g || card.dataset.custom === '1') ? '' : 'none';
+        });
+      });
       root.querySelectorAll('.nwpc-tpl-card').forEach(card => {
         card.addEventListener('mouseenter', () => { card.style.borderColor = '#c9a84c'; });
         card.addEventListener('mouseleave', () => { card.style.borderColor = '#333'; });
-        card.addEventListener('click', async () => {
-          const tpl = TEMPLATES.find(t => t.id === card.dataset.id);
+        card.addEventListener('click', async (e) => {
+          if (e.target.closest('button')) return;
+          const tpl = all.find(t => t.id === card.dataset.id);
           if(!tpl) return;
           dlg.close();
           await this._applyTemplate(tpl, html);
         });
+      });
+      root.querySelectorAll('.nwpc-tpl-fav').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          e.stopPropagation();
+          await LiveNewspaper.toggleFavoriteTemplate(btn.dataset.id);
+          dlg.close(); this._openTemplateGallery(html);
+        });
+      });
+      root.querySelectorAll('.nwpc-tpl-del').forEach(btn => {
+        btn.addEventListener('click', async e => {
+          e.stopPropagation();
+          const ok = await this._confirm('Удалить шаблон?', 'Это действие нельзя отменить.');
+          if(!ok) return;
+          await LiveNewspaper.deleteCustomTemplate(btn.dataset.id);
+          dlg.close(); this._openTemplateGallery(html);
+        });
+      });
+      root.querySelector('#nwpc-tpl-save-current')?.addEventListener('click', async () => {
+        const name = await this._askName('Мой шаблон');
+        if(!name) return;
+        await LiveNewspaper.saveCustomTemplate(this._getPageData(), name);
+        ui.notifications.info('Шаблон сохранён!');
+        dlg.close(); this._openTemplateGallery(html);
       });
     });
     dlg.render(true);
@@ -1915,10 +2263,10 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const page = this._getPageData();
     const { w, h } = this._getCanvasSize(page);
     page.paperStyle = tpl.paperStyle;
-    const rawEls = tpl.makeElements(w, h);
+    const rawEls = typeof tpl.makeElements === 'function' ? tpl.makeElements(w, h) : (tpl.elements || []);
     page.elements = rawEls.map(el => ({
       ...el,
-      id: el.id || `el_${el.type}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
+      id: `el_${el.type}_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
       style: el.style || {},
     }));
     await this._savePageData(page);
@@ -2002,9 +2350,10 @@ export class NewsEditorApp extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async _sendBreakingNews(data) {
+    if (!isFeatureEnabled('emergencyIssue')) { ui.notifications.warn('Экстренный выпуск отключён в настройках модуля.'); return; }
     const { BreakingNewsOverlay } = await import('./breaking-news.mjs');
     new BreakingNewsOverlay(data).render(true);
-    game.socket.emit('module.campaign-master-tools', { action: 'showBreakingNews', data });
+    broadcastBreakingNews(data);
     ui.notifications.info(game.i18n.localize('cmt.breaking.sent'));
   }
 

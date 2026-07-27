@@ -41,7 +41,6 @@ export class BreakingNewsOverlay extends HandlebarsApplicationMixin(ApplicationV
       setTimeout(() => this.close(), context.autoClose * 1000);
     }
 
-    // Звук уведомления
     try {
       foundry.audio.AudioHelper.play({
         src: 'modules/campaign-master-tools/sounds/notify.mp3',
@@ -49,6 +48,6 @@ export class BreakingNewsOverlay extends HandlebarsApplicationMixin(ApplicationV
         autoplay: true,
         loop: false,
       }, true);
-    } catch(e) { /* тихо если аудио недоступно */ }
+    } catch(e) {}
   }
 }

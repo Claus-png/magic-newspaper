@@ -1,12 +1,10 @@
-// Галерея встроенных шаблонов страниц
-// Каждый шаблон — функция makeElements(w, h) → массив элементов
-
 export const TEMPLATES = [
   {
     id: 'classic-gazette',
     label: 'Городской вестник',
     icon: 'fas fa-newspaper',
     paperStyle: 'classic',
+    genre: 'news',
     makeElements: (w, h) => ([
       { id:'tpl_mast',  type:'masthead', x:0,   y:0,   w:w, h:140,
         props:{ line1:'Городской', line2:'Вестник', motto:'"Правда без прикрас"', style:'classic', textColor:'' } },
@@ -34,6 +32,7 @@ export const TEMPLATES = [
     label: 'Разыскивается!',
     icon: 'fas fa-user-secret',
     paperStyle: 'vintage',
+    genre: 'crime',
     makeElements: (w, h) => {
       const imgSize = Math.round(w * 0.5);
       const imgY = 110;
@@ -57,6 +56,7 @@ export const TEMPLATES = [
     label: 'Секретный документ',
     icon: 'fas fa-file-alt',
     paperStyle: 'archive',
+    genre: 'secret',
     makeElements: (w, h) => ([
       { id:'tpl_stamp', type:'masthead', x:0, y:0, w:w, h:110,
         props:{ line1:'СОВЕРШЕННО', line2:'СЕКРЕТНО', motto:'Уничтожить после прочтения', style:'classic', textColor:'#8b0000' } },
@@ -77,24 +77,25 @@ export const TEMPLATES = [
 
   {
     id: 'cyber-report',
-    label: 'Технический отчёт',
-    icon: 'fas fa-terminal',
-    paperStyle: 'cyber',
+    label: 'Донесение разведки',
+    icon: 'fas fa-map',
+    paperStyle: 'archive',
+    genre: 'secret',
     makeElements: (w, h) => ([
       { id:'tpl_mast', type:'masthead', x:0, y:0, w:w, h:120,
-        props:{ line1:'NEXUS', line2:'REPORT', motto:'// CLASSIFIED TRANSMISSION //', style:'classic', textColor:'#00ff88' } },
+        props:{ line1:'ДОНЕСЕНИЕ', line2:'РАЗВЕДКИ', motto:'Передать в собственные руки капитана стражи', style:'classic', textColor:'#3a2a1a' } },
       { id:'tpl_rule1', type:'rule', x:0, y:123, w:w, h:8,
-        props:{ thickness:2, style:'solid', color:'#00ff88' } },
+        props:{ thickness:2, style:'solid', color:'#5c3d0a' } },
       { id:'tpl_head', type:'headline', x:10, y:140, w:w-20, h:70,
-        props:{ text:'ОПЕРАЦИЯ: КОД КРАСНЫЙ — СТАТУС АКТИВЕН', fontSize:20, fontUnit:'px', textColor:'#00ff88' } },
+        props:{ text:'Тревога у восточной границы: замечены чужие отряды', fontSize:20, fontUnit:'px', textColor:'#3a2a1a' } },
       { id:'tpl_byl',  type:'byline',   x:10, y:215, w:w-20, h:24,
-        props:{ text:'ИСТОЧНИК: АГЕНТ-7 | ВРЕМЕННАЯ МЕТКА: ' + Date.now(), textColor:'#888' } },
+        props:{ text:'От лазутчика по прозвищу Тень | ' + new Date().toLocaleDateString(), textColor:'#777' } },
       { id:'tpl_body', type:'body',     x:10, y:248, w:Math.round(w*0.58), h:340,
-        props:{ text:'СТАТУС МИССИИ: АКТИВНА\n\nЦЕЛЕВОЙ ОБЪЕКТ обнаружен в секторе Дельта-9. Наблюдение установлено.\n\nПРОТОКОЛ ДЕЙСТВИЙ:\nФаза 1 — сбор данных завершена\nФаза 2 — инфильтрация в процессе\nФаза 3 — ожидание подтверждения', fontSize:12, fontUnit:'px', dropCap:false, columns:1, textColor:'#cccccc' } },
+        props:{ text:'Положение дел на границе: неспокойно.\n\nВ приграничном лесу замечен отряд неизвестной принадлежности, числом до двух десятков. Ведут наблюдение за трактом, костров не жгут.\n\nЧто предпринято:\nПервое — установлена скрытая застава\nВторое — выслан гонец в замок\nТретье — ждём приказа выступать или ждать', fontSize:12, fontUnit:'px', dropCap:false, columns:1, textColor:'#2a1a10' } },
       { id:'tpl_box1', type:'box',      x:Math.round(w*0.62), y:248, w:Math.round(w*0.36), h:160,
-        props:{ title:'// ДАННЫЕ ЦЕЛИ', text:'Идентификатор: UNKNOWN\nУгроза: ВЫСОКАЯ\nМестоположение: АКТИВНО', border:true, textColor:'#00ff88' } },
+        props:{ title:'О ПРОТИВНИКЕ', text:'Опознавательных знаков нет\nУгроза: высокая\nМестонахождение: восточный лес', border:true, textColor:'#5c3d0a' } },
       { id:'tpl_box2', type:'box',      x:Math.round(w*0.62), y:420, w:Math.round(w*0.36), h:160,
-        props:{ title:'// РЕСУРСЫ', text:'Агентов в поле: 3\nРезервная группа: ГОТОВА\nЭвакуация: ПЛАН Б', border:true, textColor:'#ffaa00' } },
+        props:{ title:'СИЛЫ И СРЕДСТВА', text:'Соглядатаев в поле: 3\nЗапасной отряд: наготове\nПуть отхода: через брод', border:true, textColor:'#8b6914' } },
     ]),
   },
 
@@ -103,6 +104,7 @@ export const TEMPLATES = [
     label: 'Королевский указ',
     icon: 'fas fa-crown',
     paperStyle: 'luxury',
+    genre: 'official',
     makeElements: (w, h) => ([
       { id:'tpl_rule0', type:'rule', x:20, y:20, w:w-40, h:12,
         props:{ thickness:3, style:'double', color:'#8b6914' } },
@@ -127,7 +129,8 @@ export const TEMPLATES = [
     id: 'news-flash',
     label: 'Срочно в номер',
     icon: 'fas fa-bolt',
-    paperStyle: 'noir',
+    paperStyle: 'grunge',
+    genre: 'urgent',
     makeElements: (w, h) => ([
       { id:'tpl_flash', type:'masthead', x:0, y:0, w:w, h:100,
         props:{ line1:'⚡ СРОЧНО', line2:'В НОМЕР', motto:'Экстренный выпуск', style:'classic', textColor:'#ffffff' } },
@@ -143,6 +146,71 @@ export const TEMPLATES = [
         props:{ title:'ФАКТЫ', text:'Что известно:\n• Пункт 1\n• Пункт 2\n• Пункт 3', border:true, textColor:'#ffffff' } },
       { id:'tpl_byl', type:'byline',    x:10, y:580, w:w-20, h:24,
         props:{ text:'Специальный корреспондент | Редакция работает круглосуточно', textColor:'#888' } },
+    ]),
+  },
+
+  {
+    id: 'distress-issue', label: 'Выпуск бедствия', icon: 'fas fa-triangle-exclamation', paperStyle: 'grunge', genre: 'urgent',
+    makeElements: (w, h) => ([
+      { id:'tpl_dm', type:'masthead', x:0, y:0, w:w, h:110, props:{ line1:'ГОРОД В БЕДЕ', line2:'', motto:'Экстренные сводки', style:'classic', textColor:'#2a1a1a' } },
+      { id:'tpl_dr', type:'rule', x:0, y:113, w:w, h:10, props:{ thickness:4, style:'solid', color:'#5a1a1a' } },
+      { id:'tpl_dh', type:'headline', x:10, y:132, w:w-20, h:110, props:{ text:'Бедствие продолжается: жители в панике', fontSize:34, fontUnit:'px', textColor:'' } },
+      { id:'tpl_db', type:'body', x:10, y:250, w:Math.round(w*0.66), h:340, props:{ text:'Ситуация ухудшается с каждым часом. Власти призывают сохранять спокойствие, но улицы города говорят об обратном...', fontSize:14, fontUnit:'px', dropCap:true, columns:2, textColor:'' } },
+      { id:'tpl_dq', type:'quote', x:Math.round(w*0.7), y:250, w:Math.round(w*0.28), h:160, props:{ text:'Мы не знаем, что будет завтра.', author:'— Очевидец', textColor:'' } },
+      { id:'tpl_db2', type:'box', x:Math.round(w*0.7), y:420, w:Math.round(w*0.28), h:170, props:{ title:'ЧТО ДЕЛАТЬ', text:'• Не покидайте дом без нужды\n• Следите за сводками\n• Помогайте соседям', border:true, textColor:'' } },
+    ]),
+  },
+  {
+    id: 'madness-issue', label: 'Выпуск безумия', icon: 'fas fa-brain', paperStyle: 'gothic', genre: 'horror',
+    makeElements: (w, h) => ([
+      { id:'tpl_mm', type:'masthead', x:0, y:0, w:w, h:120, props:{ line1:'...ОНИ ЗНАЮТ...', line2:'', motto:'смотри в тени', style:'gothic', textColor:'#8b0000' } },
+      { id:'tpl_mr', type:'rule', x:0, y:123, w:w, h:8, props:{ thickness:2, style:'dashed', color:'#5a0000' } },
+      { id:'tpl_mh', type:'headline', x:10, y:140, w:w-20, h:100,
+        props:{ text:'Заголовок как будто дрожит на странице...', fontSize:32, fontUnit:'px', textColor:'#7a0000' },
+        visibility:'trigger', triggerType:'effect', triggerKey:'madness' },
+      { id:'tpl_mb', type:'body', x:10, y:250, w:Math.round(w*0.66), h:320,
+        props:{ text:'Текст выглядит обычно... пока не присмотришься. Между строк — то, чего там быть не должно.', fontSize:14, fontUnit:'px', dropCap:true, columns:2, textColor:'' },
+        variants:{ 'trigger:madness': { text:'ОНИ ВСЕГДА БЫЛИ ЗДЕСЬ. Текст меняется, стоит моргнуть. Слова ползут по странице, складываясь в имя, которое лучше не произносить.' } } },
+      { id:'tpl_mbox', type:'box', x:Math.round(w*0.7), y:250, w:Math.round(w*0.28), h:200,
+        props:{ title:'???', text:'Здесь что-то было написано.', border:true, textColor:'#5a0000' }, visibility:'reveal' },
+    ]),
+  },
+  {
+    id: 'propaganda', label: 'Пропаганда', icon: 'fas fa-bullhorn', paperStyle: 'rustic', genre: 'official',
+    makeElements: (w, h) => ([
+      { id:'tpl_pm', type:'masthead', x:0, y:0, w:w, h:120, props:{ line1:'ГОЛОС НАРОДА', line2:'', motto:'Единство. Порядок. Будущее.', style:'classic', textColor:'#8b0000' } },
+      { id:'tpl_pr', type:'rule', x:0, y:123, w:w, h:12, props:{ thickness:4, style:'solid', color:'#8b0000' } },
+      { id:'tpl_ph', type:'headline', x:10, y:142, w:w-20, h:110, props:{ text:'ВЕЛИКИЕ СВЕРШЕНИЯ ПРОДОЛЖАЮТСЯ', fontSize:36, fontUnit:'px', textAlign:'center', textColor:'' } },
+      { id:'tpl_pb', type:'body', x:10, y:260, w:Math.round(w*0.66), h:320, props:{ text:'Благодаря мудрому руководству, город достиг небывалых успехов. Враги прогресса будут остановлены.', fontSize:14, fontUnit:'px', dropCap:true, columns:2, textColor:'' } },
+      { id:'tpl_pad', type:'ad', x:Math.round(w*0.7), y:260, w:Math.round(w*0.28), h:150, props:{ title:'ТВОЙ ДОЛГ', text:'Запишись в ополчение сегодня!', textColor:'' } },
+    ]),
+  },
+  {
+    id: 'rumors', label: 'Слухи и сплетни', icon: 'fas fa-comments', paperStyle: 'vintage', genre: 'gossip',
+    makeElements: (w, h) => ([
+      { id:'tpl_rm', type:'masthead', x:0, y:0, w:w, h:110, props:{ line1:'Шёпот города', line2:'', motto:'Говорят, что...', style:'classic', textColor:'' } },
+      { id:'tpl_rr', type:'rule', x:0, y:113, w:w, h:8, props:{ thickness:2, style:'dotted', color:'#333' } },
+      { id:'tpl_rh', type:'headline', x:10, y:130, w:w-20, h:80, props:{ text:'Поговаривают, что...', fontSize:28, fontUnit:'px', textColor:'' } },
+      { id:'tpl_rb', type:'body', x:10, y:220, w:Math.round(w*0.66), h:300, props:{ text:'Достоверность не гарантируется, но три независимых источника утверждают одно и то же...', fontSize:13, fontUnit:'px', dropCap:false, columns:2, textColor:'' } },
+      { id:'tpl_rq', type:'quote', x:Math.round(w*0.7), y:220, w:Math.round(w*0.28), h:150, props:{ text:'Я слышал это своими ушами!', author:'— Аноним', textColor:'' } },
+    ]),
+  },
+  {
+    id: 'secret-report', label: 'Секретный отчёт', icon: 'fas fa-user-secret', paperStyle: 'archive', genre: 'secret',
+    makeElements: (w, h) => ([
+      { id:'tpl_sm', type:'masthead', x:0, y:0, w:w, h:100, props:{ line1:'СЕКРЕТНО', line2:'', motto:'Только для служебного пользования', style:'classic', textColor:'#333' }, visibility:'gm' },
+      { id:'tpl_sr', type:'rule', x:0, y:103, w:w, h:6, props:{ thickness:2, style:'solid', color:'#333' } },
+      { id:'tpl_sh', type:'headline', x:10, y:120, w:w-20, h:80, props:{ text:'Отчёт по операции', fontSize:26, fontUnit:'px', textColor:'' }, visibility:'gm' },
+      { id:'tpl_sb', type:'body', x:10, y:210, w:w-20, h:380, props:{ text:'Детали операции, имена информаторов, оценка рисков...', fontSize:13, fontUnit:'px', dropCap:false, columns:1, textColor:'' }, visibility:'gm', gmNote:'Черновик только для GM — раскрывать игрокам по частям через варианты/reveal.' },
+    ]),
+  },
+  {
+    id: 'underground-newspaper', label: 'Подпольная газета', icon: 'fas fa-mask', paperStyle: 'grunge', genre: 'secret',
+    makeElements: (w, h) => ([
+      { id:'tpl_um', type:'masthead', x:0, y:0, w:w, h:100, props:{ line1:'ВОЛЬНЫЙ ЛИСТОК', line2:'', motto:'Правда, которую скрывают от короны', style:'classic', textColor:'#2a1a1a' } },
+      { id:'tpl_ur', type:'rule', x:0, y:103, w:w, h:6, props:{ thickness:2, style:'dashed', color:'#3a1a1a' } },
+      { id:'tpl_uh', type:'headline', x:10, y:120, w:w-20, h:90, props:{ text:'Заголовок, который не пропустит цензор канцелярии', fontSize:28, fontUnit:'px', textColor:'' } },
+      { id:'tpl_ub', type:'body', x:10, y:220, w:w-20, h:360, props:{ text:'Отпечатано тайно, вручную, при свете свечи. Передайте следующему, кому доверяете. Уничтожьте после прочтения.', fontSize:13, fontUnit:'px', dropCap:false, columns:2, textColor:'' }, visibility:'users' },
     ]),
   },
 ];

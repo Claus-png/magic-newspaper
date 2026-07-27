@@ -1,6 +1,8 @@
 // News Viewer — Teddy Bear
 
-import { PAGE_SIZES, LiveNewspaper, PAPER_IMG_BASE, PAPER_IMAGES, renderElementHTML, pageToJournalHTML } from '../newspaper.mjs';
+import { PAGE_SIZES, LiveNewspaper, PAPER_IMG_BASE, PAPER_IMAGES, renderElementHTML, pageToJournalHTML, resolveElementForUser, triggerMatchesUser } from '../newspaper.mjs';
+import { requestRevealElement, requestPersonalJournal, broadcastForceViewerPage } from '../socket.mjs';
+import { isFeatureEnabled } from '../feature-flags.mjs';
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -9,7 +11,7 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
   constructor(options={}) {
     super(options);
     this._zoom = null;
-    this._currentPage = 0;  // Локальная навигация — не синхронизируется с другими клиентами
+    this._currentPage = 0;
   }
 
   static DEFAULT_OPTIONS = {
@@ -24,7 +26,6 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
 
   async _prepareContext(options) {
     const data = LiveNewspaper.getData();
-    // Проверяем что текущая страница не вышла за пределы (например после удаления страницы)
     this._currentPage = Math.min(this._currentPage, data.pages.length - 1);
     return {
       pageNum: this._currentPage + 1,
@@ -47,13 +48,11 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     super._onRender(context, options);
     const html = this.element;
 
-    // Обновить заголовок окна динамически
     const titleEl = html.closest('.app')?.querySelector('.window-title');
     if (titleEl && context.title) titleEl.textContent = context.title;
 
     this._renderPage(html);
 
-    // Навигация — только локальная, не мутирует world-settings
     html.querySelector('#nv-prev-btn')?.addEventListener('click', () => {
       if (this._currentPage > 0) {
         this._currentPage--;
@@ -77,12 +76,9 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       });
     });
 
-    // Кнопка "Показать всем" — только для GM, переключает страницу у всех клиентов
     html.querySelector('#nv-force-page-btn')?.addEventListener('click', () => {
-      game.socket.emit('module.campaign-master-tools', {
-        action: 'forceViewerPage',
-        pageIdx: this._currentPage,
-      });
+      if (!isFeatureEnabled('autoShowAll')) { ui.notifications.warn('Показ страницы всем игрокам отключён в настройках модуля.'); return; }
+      broadcastForceViewerPage(this._currentPage);
       ui.notifications.info(game.i18n.localize('cmt.viewer.forcedPage'));
     });
 
@@ -90,7 +86,6 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     html.querySelector('#nv-download-btn')?.addEventListener('click', ()=>this._download(html));
     html.querySelector('#nv-save-journal-btn')?.addEventListener('click', ()=>this._saveToPersonalJournal());
 
-    // Зум
     html.querySelector('#nv-zoom-out')?.addEventListener('click', ()=>{
       this._zoom = Math.max(0.2, (this._zoom||1) - 0.1);
       this._applyZoom(html);
@@ -162,20 +157,22 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
       }
     }
 
-    // Фильтрация элементов по видимости
+    const selectiveOn = isFeatureEnabled('selectiveDelivery');
+    const variantsOn  = isFeatureEnabled('personalizedVersions');
     const visibleEls = (page.elements||[]).filter(el => {
       const v = el.visibility ?? 'all';
       if(v === 'gm')     return game.user.isGM;
       if(v === 'role')   return game.user.isGM || game.user.role >= (el.visibilityRole ?? 1);
+      if(v === 'users')  return selectiveOn ? (game.user.isGM || (el.visibilityUserIds||[]).includes(game.user.id)) : true;
+      if(v === 'trigger')return isFeatureEnabled('personalizedVersions') ? (game.user.isGM || triggerMatchesUser(el, game.user)) : true;
       if(v === 'reveal') return game.user.isGM || (el.revealed === true);
       return true;
-    });
+    }).map(el => (variantsOn ? (resolveElementForUser(el, game.user) || el) : el));
 
     visibleEls.forEach(el => {
       const div=document.createElement('div');
       Object.assign(div.style, { position:'absolute', left:`${el.x}px`, top:`${el.y}px`, width:`${el.w}px`, height:`${el.h}px`, overflow:'hidden', zIndex:'10' });
 
-      // Reveal-placeholder для скрытых элементов
       const v = el.visibility ?? 'all';
       if(v === 'reveal' && !el.revealed && !game.user.isGM) {
         div.innerHTML = `<div class="nwpc-el-hidden-reveal" data-el-id="${el.id}">
@@ -183,11 +180,8 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
           <span>${game.i18n.localize('cmt.viewer.clickToReveal')}</span>
         </div>`;
         div.querySelector('.nwpc-el-hidden-reveal')?.addEventListener('click', ()=>{
-          game.socket.emit('module.campaign-master-tools', {
-            action: 'revealElement',
-            pageIdx: this._currentPage,
-            elId: el.id,
-          });
+          if (!isFeatureEnabled('revealMechanic')) return;
+          requestRevealElement(this._currentPage, el.id);
         });
       } else {
         div.innerHTML = renderElementHTML(el);
@@ -230,7 +224,6 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     this._applyZoom(html);
   }
 
-  // Запрос GM сохранить страницу в личный журнал игрока
   async _saveToPersonalJournal() {
     const page = LiveNewspaper.getPage(this._currentPage);
     const mast = page.elements?.find(e => e.type === 'masthead');
@@ -241,7 +234,6 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const content = pageToJournalHTML(page);
 
     if(game.user.isGM) {
-      // GM создаёт запись напрямую (socket.emit не работает для отправителя)
       try {
         const entry = await JournalEntry.create({
           name: fullTitle,
@@ -261,17 +253,13 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     } else {
       const gmOnline = game.users.some(u => u.isGM && u.active);
       if(!gmOnline) { ui.notifications.warn(game.i18n.localize('cmt.viewer.gmOffline')); return; }
-      game.socket.emit('module.campaign-master-tools', {
-        action:  'createPersonalJournal',
-        userId:  game.user.id,
-        title:   fullTitle,
-        content,
-      });
+      requestPersonalJournal(game.user.id, fullTitle, content);
       ui.notifications.info(game.i18n.localize('cmt.viewer.journalRequested'));
     }
   }
 
   async _download(html) {
+    if (!isFeatureEnabled('htmlExport')) { ui.notifications.warn('Экспорт HTML отключён в настройках модуля.'); return; }
     const area = html.querySelector('#nv-paper'); if(!area) return;
     const origT = area.style.transform;
     area.style.transform = '';
@@ -323,17 +311,12 @@ export class NewsViewerApp extends HandlebarsApplicationMixin(ApplicationV2) {
     const content = cloneEl.outerHTML;
     area.style.transform = origT;
 
-    const FONTS = 'https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400;1,700&family=Lato:wght@300;400;700&family=Caveat:wght@400;700&family=Cormorant+Garamond:ital,wght@0,400;0,600;0,700;1,400;1,600&family=Orbitron:wght@400;700;900&family=Share+Tech+Mono&family=Montserrat:wght@400;700;900&family=Bebas+Neue&family=Special+Elite&family=Merriweather:ital,wght@0,400;0,700;1,400&family=Cinzel:wght@400;700;900&family=Poppins:wght@300;400;700&family=EB+Garamond:ital,wght@0,400;0,700;1,400&family=Lora:ital,wght@0,400;0,700;1,400&family=Fira+Code:wght@400;700&family=VT323&family=Inter:wght@300;400;700&family=Roboto+Mono:wght@400;700&family=IBM+Plex+Mono:wght@400;700&family=Courier+Prime:ital,wght@0,400;0,700;1,400&family=Fira+Sans:wght@300;400;700&display=swap';
-
     const full = `<!DOCTYPE html>
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Газета</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="${FONTS}" rel="stylesheet">
 <style>
 *{box-sizing:border-box;margin:0;padding:0;}
 body{background:#d8d0c0;padding:40px;display:flex;justify-content:center;align-items:flex-start;min-height:100vh;}

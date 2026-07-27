@@ -4,12 +4,16 @@
 import { LiveNewspaper } from './newspaper.mjs';
 import { NewsEditorApp } from './apps/news-editor.mjs';
 import { NewsViewerApp } from './apps/news-viewer.mjs';
+import { registerSocket } from './socket.mjs';
+import { registerFeatureFlags, isFeatureEnabled } from './feature-flags.mjs';
+import { FlagsMenuApp } from './apps/flags-menu.mjs';
 
 const log  = msg => console.log('[Campaign Master]', msg);
 const warn = msg => console.warn('[Campaign Master]', msg);
 
 function openEditor() {
   try {
+    if (!isFeatureEnabled('editor')) { ui.notifications.warn('Редактор газеты отключён в настройках модуля.'); return; }
     if (!LiveNewspaper.canDo('Create')) { ui.notifications.warn('Недостаточно прав.'); return; }
     const app = foundry.applications.instances.get('cmt-news-editor');
     if (app) app.bringToFront();
@@ -19,6 +23,7 @@ function openEditor() {
 
 function openViewer() {
   try {
+    if (!isFeatureEnabled('viewer')) { ui.notifications.warn('Просмотр газеты отключён в настройках модуля.'); return; }
     if (!LiveNewspaper.canDo('View')) { ui.notifications.warn('Недостаточно прав.'); return; }
     const app = foundry.applications.instances.get('cmt-news-viewer');
     if (app) app.bringToFront();
@@ -34,88 +39,38 @@ Hooks.once('init', () => {
     openViewer,
   };
   LiveNewspaper.register();
+  registerFeatureFlags();
+  game.settings.registerMenu('campaign-master-tools', 'flagsMenu', {
+    name: 'Переключатели функций',
+    label: 'Открыть настройки функций',
+    hint: 'Включение/выключение отдельных функций модуля по блокам, готовые пресеты кампании.',
+    icon: 'fas fa-sliders-h',
+    type: FlagsMenuApp,
+    restricted: true,
+  });
   log('Газета зарегистрирована');
+});
+
+Hooks.once('socketlib.ready', () => {
+  registerSocket();
+  log('socketlib подключён');
 });
 
 Hooks.once('ready', () => {
   LiveNewspaper.init();
   log('Campaign Master Tools активирован');
 
-  game.socket.on('module.campaign-master-tools', async payload => {
-
-    // GM получает запрос раскрыть элемент, обновляет данные и рассылает refresh всем
-    if (payload.action === 'revealElement' && game.user.isGM) {
-      const d = LiveNewspaper.getData();
-      const page = d.pages[payload.pageIdx];
-      const el = page?.elements?.find(e => e.id === payload.elId);
-      if (!el) return;
-      el.revealed = true;
-      await LiveNewspaper.setPage(payload.pageIdx, page);
-      game.socket.emit('module.campaign-master-tools', { action: 'refreshViewer' });
-    }
-
-    // Всем клиентам — перезагрузить вьювер
-    if (payload.action === 'refreshViewer') {
-      await LiveNewspaper.init();
-      foundry.applications.instances.get('cmt-news-viewer')?.render({ force: true });
-    }
-
-    // GM создаёт личную запись журнала для конкретного игрока
-    if (payload.action === 'createPersonalJournal' && game.user.isGM) {
-      const user = game.users.get(payload.userId);
-      if (!user) return;
-      // Прогоняем через TextEditor.sanitizeHTML — убирает потенциально опасный HTML
-      const safeContent = TextEditor.sanitizeHTML(payload.content ?? '');
-      const entry = await JournalEntry.create({
-        name: payload.title,
-        ownership: { default: 0, [payload.userId]: 3 },
-      });
-      await entry.createEmbeddedDocuments('JournalEntryPage', [{
-        name: payload.title,
-        type: 'text',
-        text: { content: safeContent, format: 1 },
-      }]);
-      game.socket.emit('module.campaign-master-tools', {
-        action: 'journalCreated',
-        userId: payload.userId,
-        journalId: entry.id,
-      });
-    }
-
-    // Игрок получает уведомление и открывает только что созданную запись
-    if (payload.action === 'journalCreated' && payload.userId === game.user.id) {
-      ui.notifications.info('Страница газеты сохранена в ваш Журнал!');
-      // Небольшая задержка — документ должен успеть синхронизироваться с сервером
-      setTimeout(() => {
-        const entry = game.journal.get(payload.journalId);
-        entry?.sheet?.render(true);
-      }, 500);
-    }
-    // GM принудительно переключает страницу у всех игроков (кнопка "Показать всем")
-    if (payload.action === 'forceViewerPage') {
-      const viewer = foundry.applications.instances.get('cmt-news-viewer');
-      if (viewer) {
-        viewer._currentPage = payload.pageIdx;
-        viewer.render({ force: true });
-      }
-    }
-
-    // Показать экстренный выпуск на экранах игроков
-    if (payload.action === 'showBreakingNews' && !game.user.isGM) {
-      import('./apps/breaking-news.mjs').then(({ BreakingNewsOverlay }) => {
-        new BreakingNewsOverlay(payload.data).render(true);
-      });
-    }
-  });
+  if (game.user.isGM) {
+    LiveNewspaper.migrateBase64Images().catch(e => console.warn('[CMT] Миграция base64 не выполнена:', e));
+  }
 });
 
-// Кнопки в панели Notes
 Hooks.on('getSceneControlButtons', controls => {
   try {
     const notesControl = controls.notes;
     if (!notesControl) { warn('Не найден controls.notes — кнопки не добавлены'); return; }
 
-    if (game.user.isGM && LiveNewspaper.canDo('Create')) {
+    if (game.user.isGM && LiveNewspaper.canDo('Create') && isFeatureEnabled('editor') && isFeatureEnabled('buttonsNotes')) {
       notesControl.tools['cmt-editor'] = {
         name:     'cmt-editor',
         title:    game.i18n.localize('cmt.controls.editorTitle'),
@@ -125,7 +80,7 @@ Hooks.on('getSceneControlButtons', controls => {
       };
     }
 
-    if (LiveNewspaper.canDo('View')) {
+    if (LiveNewspaper.canDo('View') && isFeatureEnabled('viewer') && isFeatureEnabled('buttonsNotes')) {
       notesControl.tools['cmt-viewer'] = {
         name:     'cmt-viewer',
         title:    game.i18n.localize('cmt.controls.viewerTitle'),
@@ -139,14 +94,13 @@ Hooks.on('getSceneControlButtons', controls => {
   } catch(e) { warn('Ошибка панели: ' + e.message); }
 });
 
-// Кнопки в боковом журнале
 Hooks.on('renderJournalDirectory', (app, html) => {
   const element = (html instanceof HTMLElement) ? html : html[0];
   const actionButtons = element.querySelector('.header-actions');
   if (!actionButtons) return;
 
-  const canView = LiveNewspaper.canDo('View');
-  const canCreate = game.user.isGM && LiveNewspaper.canDo('Create');
+  const canView = LiveNewspaper.canDo('View') && isFeatureEnabled('viewer') && isFeatureEnabled('buttonsJournal');
+  const canCreate = game.user.isGM && LiveNewspaper.canDo('Create') && isFeatureEnabled('editor') && isFeatureEnabled('buttonsJournal');
 
   if (canCreate) {
     const div = document.createElement('div');
@@ -178,7 +132,6 @@ Hooks.on('renderJournalDirectory', (app, html) => {
   }
 });
 
-// Кнопка в сообщении чата — открыть вьювер
 Hooks.on('renderChatMessageHTML', (msg, html) => {
   try {
     const root = html instanceof HTMLElement ? html : html?.[0];
@@ -191,4 +144,4 @@ Hooks.on('renderChatMessageHTML', (msg, html) => {
   } catch(e) { console.error('[CMT] renderChatMessageHTML error:', e); }
 });
 
-log('Campaign Master Tools v1.0.5 загружен');
+log('Campaign Master Tools v2.0.0 загружен');

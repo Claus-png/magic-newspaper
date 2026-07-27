@@ -1,9 +1,14 @@
 {
   "id": "campaign-master-tools",
   "title": "Magic Newspaper",
-  "description": "<p>Drag-and-drop конструктор внутриигровых газет для Foundry VTT v13. Мастер верстает — игроки читают в реальном времени. 16 стилей бумаги, 9 типов элементов, типографика, история действий, дублирование, привязка к сетке, выравнивание, публикация в чат, архив, черновики, галерея шаблонов, экстренный выпуск, экспорт HTML/JSON.</p>",
-  "version": "1.0.6",
+  "description": "<p>Drag-and-drop конструктор внутриигровых газет для Foundry VTT v14. Мастер верстает — игроки читают в реальном времени. 16 стилей бумаги, 9 типов элементов, типографика, история действий, дублирование, привязка к сетке, выравнивание, публикация в чат, архив, черновики, галерея шаблонов, экстренный выпуск, экспорт HTML/JSON.</p>",
+  "version": "2.0.0",
   "socket": true,
+  "relationships": {
+    "requires": [
+      { "id": "socketlib", "type": "module", "compatibility": { "minimum": "1.2.6" } }
+    ]
+  },
   "authors": [
     {
       "name": "Teddy Bear",
@@ -12,14 +17,15 @@
     }
   ],
   "compatibility": {
-    "minimum": "13",
-    "verified": "13.351"
+    "minimum": "14",
+    "verified": "14.356"
   },
   "esmodules": [
     "scripts/main.mjs"
   ],
   "styles": [
-    "styles/campaign-master.css"
+    "styles/campaign-master.css",
+    "styles/fonts.css"
   ],
   "languages": [
     {
@@ -40,6 +46,6 @@
   "bugs": "https://github.com/Claus-png/magic-newspaper/issues",
   "changelog": "https://github.com/Claus-png/magic-newspaper/blob/main/CHANGELOG.md",
   "manifest": "https://www.dropbox.com/scl/fi/bi9izyfqvg35wu6meqvhr/module.json?rlkey=7u0erwpyk6nurzizka85gd2se&st=kj943zo2&dl=1",
-  "download": "https://github.com/Claus-png/magic-newspaper/releases/download/1.0.6/module.zip",
+  "download": "https://github.com/Claus-png/magic-newspaper/releases/download/2.0.0/module.zip",
   "flags": {}
 }
